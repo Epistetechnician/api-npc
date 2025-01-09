@@ -25,7 +25,6 @@
     "test:ingest": "ts-node -r tsconfig-paths/register scripts/testDataIngestion.ts"
   },
   "dependencies": {
-    "@api/birdeyedotso": "file:.api/apis/birdeyedotso",
     "@flipsidecrypto/sdk": "^2.1.0",
     "@heroicons/react": "^2.2.0",
     "@supabase/supabase-js": "^2.47.5",
