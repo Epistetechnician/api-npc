@@ -1,16 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { Terminal as LucideTerminal, Send, X, Maximize2, Minimize2 } from 'lucide-react'
 import { 
   aggregateProtocolData,
   trackBlockchainMetrics,
   formatNumber
 } from '../src/utils/metrics'
-import { 
-  handleNaturalLanguageQuery,
-  type ExtendedQueryConfig,
-  type QueryResult
-} from '../src/utils/naturalLanguageQuery'
-import { validateConfig } from '../config/env'
+
 
 interface HistoryEntry {
   type: 'system' | 'user' | 'error' | 'ascii' | 'success' | 'chart' | 'link' | 
@@ -125,60 +119,7 @@ interface ApiEndpoint {
   exampleResponse?: any;
 }
 
-// Add this near the top of the file with other interfaces
-interface ApiConfig {
-  baseUrl: string;
-  headers: Record<string, string>;
-}
 
-// Update the API_ENDPOINTS configuration
-const getApiConfig = (): ApiConfig => {
-  const duneApiKey = process.env.NEXT_PUBLIC_DUNE_API_KEY;
-  if (!duneApiKey) {
-    throw new Error('NEXT_PUBLIC_DUNE_API_KEY is not configured');
-  }
-
-  return {
-    baseUrl: 'https://api.dune.com/api/v1',
-    headers: {
-      'x-dune-api-key': duneApiKey,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    }
-  };
-};
-
-const API_ENDPOINTS: ApiEndpoint[] = [
-  {
-    name: 'getDuneQuery',
-    method: 'GET',
-    endpoint: '/query/:query_id/results',
-    description: 'Execute a Dune Analytics query',
-    exampleParams: {
-      query_id: '1234567'
-    },
-    exampleResponse: {
-      execution_id: "01GX0P4K3SN6NZV2QSNF4Q4AHH",
-      state: "QUERY_STATE_COMPLETED",
-      data: {
-        rows: [],
-        metadata: {}
-      }
-    }
-  },
-  {
-    name: 'getProtocols',
-    method: 'GET',
-    endpoint: '/protocols',
-    description: 'Get all DeFi protocols data',
-    exampleResponse: {
-      protocols: [
-        { name: 'Uniswap', tvl: 1000000000, volume24h: 500000000 }
-      ]
-    }
-  },
-  // ... other endpoints ...
-];
 
 const ASCII_LOGO = `
 :::= === :::====  :::===== :::==== :::===== :::====  :::======= 
