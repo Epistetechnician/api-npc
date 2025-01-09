@@ -2,14 +2,21 @@
 const nextConfig = {
   reactStrictMode: true,
   eslint: {
-    ignoreDuringBuilds: true,
+    // Only run ESLint on build in production
+    ignoreDuringBuilds: process.env.NODE_ENV !== 'production',
   },
   typescript: {
-    ignoreBuildErrors: true,
+    // Only run type checking on build in production
+    ignoreBuildErrors: process.env.NODE_ENV !== 'production',
   },
-  experimental: {
-    appDir: true,
+  // Optimize for Vercel deployment
+  output: 'standalone',
+  // Handle environment variables
+  env: {
+    NEXT_PUBLIC_DUNE_API_KEY: process.env.NEXT_PUBLIC_DUNE_API_KEY,
+    NEXT_PUBLIC_FLIPSIDE_API_KEY: process.env.NEXT_PUBLIC_FLIPSIDE_API_KEY,
   },
+  // Add proper CORS headers
   async headers() {
     return [
       {
