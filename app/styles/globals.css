@@ -1,0 +1,11 @@
+.tabs {
+  @apply w-full;
+}
+
+.tab {
+  @apply px-4 py-2;
+}
+
+.tab.active {
+  @apply border-b-2 border-purple-500;
+} 

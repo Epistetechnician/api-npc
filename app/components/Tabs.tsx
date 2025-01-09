@@ -3,29 +3,31 @@
 import React from 'react'
 
 interface TabsProps {
-  activeTab: string
-  children: React.ReactNode
+  children: React.ReactNode;
 }
 
-export const Tabs: React.FC<TabsProps> = ({ activeTab, children }) => {
-  return <div className="w-full">{children}</div>
-}
+export const Tabs: React.FC<TabsProps> = ({ children }) => {
+  return (
+    <div className="w-full">
+      {children}
+    </div>
+  );
+};
 
 export const TabList: React.FC<{children: React.ReactNode}> = ({ children }) => {
   return <div className="flex border-b border-gray-700">{children}</div>
 }
 
 interface TabProps {
-  id: string
-  active?: boolean
-  onClick?: () => void
-  children: React.ReactNode
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
 }
 
-export const Tab: React.FC<TabProps> = ({ id, active, onClick, children }) => {
+export const Tab: React.FC<TabProps> = ({ active, onClick, children }) => {
   return (
     <button
-      className={`px-4 py-2 ${active ? 'border-b-2 border-purple-500' : ''}`}
+      className={`tab ${active ? 'active' : ''}`}
       onClick={onClick}
     >
       {children}

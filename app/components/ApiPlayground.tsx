@@ -106,7 +106,7 @@ const API_COMMANDS: Record<string, ApiCommand[]> = {
 
 export default function ApiPlayground() {
   const [selectedCategory, setSelectedCategory] = useState(Object.keys(API_COMMANDS)[0])
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+  const [copiedIndex, _setCopiedIndex] = useState<number | null>(null)
 
   return (
     <div className="w-full max-w-4xl mx-auto p-6">

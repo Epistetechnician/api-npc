@@ -1,30 +1,35 @@
 'use client'
 
-import React from 'react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import React from 'react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { tomorrow } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 
 interface CodeBlockProps {
-  title?: string
-  language: string
-  code: string
+  code: string;
+  language?: string;
 }
 
-export const CodeBlock: React.FC<CodeBlockProps> = ({ title, language, code }) => {
+const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'typescript' }) => {
   return (
-    <div className="my-4">
-      {title && (
-        <div className="text-sm font-mono bg-gray-800 px-4 py-2 rounded-t">
-          {title}
-        </div>
-      )}
+    <div className="rounded-lg overflow-hidden">
+      {/* @ts-ignore - Known issue with react-syntax-highlighter types */}
       <SyntaxHighlighter
         language={language}
-        style={atomDark}
-        className="rounded-b"
+        style={tomorrow}
+        customStyle={{
+          margin: 0,
+          padding: '1rem',
+          background: 'rgba(0, 0, 0, 0.5)',
+          borderRadius: '0.5rem',
+        }}
+        wrapLongLines={true}
+        PreTag="div"
+        useInlineStyles={true}
       >
-        {code.trim()}
+        {code}
       </SyntaxHighlighter>
     </div>
-  )
-} 
+  );
+};
+
+export default CodeBlock; 

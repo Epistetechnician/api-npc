@@ -1,8 +1,8 @@
 'use client'
 
 import React, { useState } from 'react'
-import { Tabs, TabList, Tab, TabPanel } from './components/Tabs'
-import { CodeBlock } from './components/CodeBlock'
+import { Tabs, TabPanel } from './components/Tabs'
+import CodeBlock from './components/CodeBlock'
 import { Section } from './components/Section'
 import { SideNav } from './components/SideNav'
 
@@ -2527,21 +2527,6 @@ client.ws.trades({
     }
   }
 
-  // Define valid data sources
-  const dataSources = [
-    'defillama', 
-    'dune', 
-    'footprint', 
-    'flipside',
-    'messari',
-    'bitquery',
-    'subgraphs', 
-    'dex', 
-    'lending', 
-    'metrics'
-  ] as const
-  type DataSource = typeof dataSources[number]
-
   return (
     <div className="flex min-h-screen">
       <SideNav 
@@ -2566,8 +2551,7 @@ client.ws.trades({
           </select>
         </div>
 
-        <Tabs activeTab={activeTab}>
-          {/* Render all sections dynamically */}
+        <Tabs>
           {sections.flatMap(section => 
             section.items.map(item => (
               <TabPanel 

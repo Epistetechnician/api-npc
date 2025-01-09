@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Book, Code, Database, FileText, GitBranch, Terminal } from 'lucide-react';
+import React, { useState } from 'react';
+import { Book, Code, Database, FileText } from 'lucide-react';
 
 interface DocState {
   loading: boolean;

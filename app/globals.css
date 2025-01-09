@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Define custom layer for component styles */
+@layer components {
+  .tab {
+    @apply px-4 py-2 text-gray-400 hover:text-gray-200 cursor-pointer border-b-2 border-transparent;
+  }
+
+  .tab.active {
+    @apply text-violet-500 border-violet-500;
+  }
+
+  .animate-gradient-x {
+    @apply bg-gradient-to-r from-violet-500 via-purple-500 to-violet-500 bg-clip-text text-transparent;
+  }
+}
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
