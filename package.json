@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "yarn build",
     "start": "next start",
     "lint": "eslint 'src/**/*.{ts,tsx}'",
     "lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
@@ -19,7 +19,6 @@
     "build:clean": "rimraf dist",
     "build:tsc": "tsc -p tsconfig.build.json",
     "build:move": "mkdir -p dist && cp -r src/* dist/",
-    "prepare": "yarn build",
     "test": "jest",
     "format": "prettier --write 'src/**/*.{ts,tsx}'",
     "test:ingest": "ts-node -r tsconfig-paths/register scripts/testDataIngestion.ts"
