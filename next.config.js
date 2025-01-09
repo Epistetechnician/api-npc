@@ -1,22 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  eslint: {
-    // Only run ESLint on build in production
-    ignoreDuringBuilds: process.env.NODE_ENV !== 'production',
-  },
-  typescript: {
-    // Only run type checking on build in production
-    ignoreBuildErrors: process.env.NODE_ENV !== 'production',
-  },
-  // Optimize for Vercel deployment
-  output: 'standalone',
-  // Handle environment variables
+  
+  // Optimize for production builds
+  swcMinify: true,
+  
+  // Configure environment variables
   env: {
     NEXT_PUBLIC_DUNE_API_KEY: process.env.NEXT_PUBLIC_DUNE_API_KEY,
     NEXT_PUBLIC_FLIPSIDE_API_KEY: process.env.NEXT_PUBLIC_FLIPSIDE_API_KEY,
   },
-  // Add proper CORS headers
+  
+  // Configure headers for API routes
   async headers() {
     return [
       {
@@ -29,6 +24,34 @@ const nextConfig = {
         ]
       }
     ]
+  },
+
+  // Webpack configuration
+  webpack: (config, { dev, isServer }) => {
+    // Optimize production builds
+    if (!dev && !isServer) {
+      config.optimization.splitChunks = {
+        chunks: 'all',
+        minSize: 20000,
+        maxSize: 244000,
+        minChunks: 1,
+        maxAsyncRequests: 30,
+        maxInitialRequests: 30,
+        cacheGroups: {
+          defaultVendors: {
+            test: /[\\/]node_modules[\\/]/,
+            priority: -10,
+            reuseExistingChunk: true,
+          },
+          default: {
+            minChunks: 2,
+            priority: -20,
+            reuseExistingChunk: true,
+          },
+        },
+      }
+    }
+    return config
   }
 }
 

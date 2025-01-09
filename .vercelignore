@@ -12,4 +12,9 @@ README.md
 .prettierrc
 coverage
 dist
-build 
+build
+.husky
+.vscode
+*.test.*
+__tests__
+jest.config.* 

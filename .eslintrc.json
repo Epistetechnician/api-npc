@@ -1,11 +1,22 @@
 {
-  "extends": ["next/core-web-vitals"],
+  "extends": [
+    "next/core-web-vitals",
+    "prettier"
+  ],
+  "plugins": [
+    "@typescript-eslint"
+  ],
   "rules": {
-    "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+    "@typescript-eslint/no-unused-vars": ["error", { 
+      "argsIgnorePattern": "^_",
+      "varsIgnorePattern": "^_"
+    }],
     "@typescript-eslint/no-explicit-any": "warn",
-    "react-hooks/exhaustive-deps": "warn",
-    "prefer-const": "warn",
-    "no-console": ["warn", { "allow": ["warn", "error"] }]
+    "react-hooks/exhaustive-deps": "error",
+    "no-console": ["warn", { 
+      "allow": ["warn", "error"] 
+    }],
+    "prefer-const": "error"
   },
   "ignorePatterns": [
     "node_modules/",
@@ -13,5 +24,13 @@
     "out/",
     "dist/",
     "build/"
+  ],
+  "overrides": [
+    {
+      "files": ["*.ts", "*.tsx"],
+      "parserOptions": {
+        "project": "./tsconfig.json"
+      }
+    }
   ]
 }
