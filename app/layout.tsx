@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { validateEnvironmentVariables } from '@/utils/env';
 
 const inter = Inter({ subsets: ["latin"] });
+
+// Validate environment variables at build time
+validateEnvironmentVariables();
 
 export const metadata: Metadata = {
   title: "AIAPICaba!",
