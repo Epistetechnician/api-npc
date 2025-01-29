@@ -471,9 +471,11 @@ def health_check():
 
 def main():
     try:
+        # Check environment variables first
         if not load_environment():
-            st.error("Failed to load environment variables")
+            st.error("Missing required environment variables. Please check your configuration.")
             st.stop()
+            return
             
         st.set_page_config(
             page_title="Funding Rate Analysis",
@@ -622,30 +624,35 @@ def display_top_opportunities(top_opps):
             axis=1
         )
         
+        # Use custom styling without matplotlib dependency
+        def style_negative(v):
+            return 'color: red' if v < 0 else 'color: green'
+            
+        def style_opportunity(v):
+            return f'background-color: rgba(0, 255, 0, {min(abs(v)/10, 0.5)})'
+        
         # Display with enhanced formatting
-        st.dataframe(
-            display_df[[
-                'symbol',
-                'exchange',
-                'funding_rate',
-                'predicted_rate',
-                'rate_diff',
-                'next_funding',
-                'direction',
-                'suggested_position',
-                'annualized_rate',
-                'opportunity_score'
-            ]].style.format({
-                'funding_rate': '{:.6f}',
-                'predicted_rate': '{:.6f}',
-                'rate_diff': '{:.6f}',
-                'annualized_rate': '{:.2f}%',
-                'opportunity_score': '{:.2f}'
-            }).background_gradient(
-                subset=['opportunity_score', 'rate_diff'],
-                cmap='RdYlGn'
-            )
-        )
+        styled_df = display_df[[
+            'symbol',
+            'exchange',
+            'funding_rate',
+            'predicted_rate',
+            'rate_diff',
+            'next_funding',
+            'direction',
+            'suggested_position',
+            'annualized_rate',
+            'opportunity_score'
+        ]].style.format({
+            'funding_rate': '{:.6f}',
+            'predicted_rate': '{:.6f}',
+            'rate_diff': '{:.6f}',
+            'annualized_rate': '{:.2f}%',
+            'opportunity_score': '{:.2f}'
+        }).applymap(style_negative, subset=['funding_rate', 'rate_diff']
+        ).applymap(style_opportunity, subset=['opportunity_score'])
+        
+        st.dataframe(styled_df)
 
 def display_detailed_view(df):
     """Display enhanced detailed view of all data"""

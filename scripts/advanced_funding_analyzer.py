@@ -26,13 +26,27 @@ console = Console()
 
 class AdvancedFundingAnalyzer:
     def __init__(self):
+        # Initialize exchanges with proper configuration
         self.binance = ccxt.binance({
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'future',
                 'adjustForTimeDifference': True
+            },
+            # Add proxy support for region-restricted areas
+            'proxies': {
+                'http': os.getenv('HTTP_PROXY', ''),
+                'https': os.getenv('HTTPS_PROXY', '')
             }
         })
+        
+        # Use API endpoints that work globally
+        if os.getenv('USE_BINANCE_GLOBAL', 'false').lower() == 'true':
+            self.binance.urls['api'] = {
+                'public': 'https://api-pub.binance.com/api/v3',
+                'private': 'https://api.binance.com/api/v3',
+            }
+
         # Use CCXT for Hyperliquid
         self.hyperliquid = ccxt.hyperliquid({
             'enableRateLimit': True,
@@ -46,7 +60,18 @@ class AdvancedFundingAnalyzer:
         """Fetch both current and predicted funding rates from Binance"""
         try:
             console.print("[cyan]Loading Binance markets...[/cyan]")
-            self.binance.load_markets()
+            
+            # Add error handling for region restrictions
+            try:
+                self.binance.load_markets()
+            except Exception as e:
+                if "restricted location" in str(e).lower():
+                    logger.warning("Using alternative Binance endpoint due to region restriction")
+                    self.binance.urls['api'] = {
+                        'public': 'https://api.binance.com/api/v3',
+                        'private': 'https://api.binance.com/api/v3',
+                    }
+                    self.binance.load_markets()
             
             formatted_rates = []
             markets = [s for s in self.binance.symbols if s.endswith(':USDT')]
