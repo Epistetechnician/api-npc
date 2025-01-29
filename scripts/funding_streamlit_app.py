@@ -48,69 +48,90 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Initialize Supabase connection
+# Initialize Supabase client
 def init_supabase():
-    """Initialize Supabase connection using Streamlit secrets"""
+    """Initialize Supabase client with proper error handling"""
     try:
-        # Get credentials from Streamlit secrets
-        supabase_url = st.secrets["connections"]["supabase"]["url"]
-        supabase_key = st.secrets["connections"]["supabase"]["key"]
+        # Get credentials directly from Streamlit secrets
+        if 'supabase' not in st.secrets:
+            raise ValueError("Supabase configuration not found in secrets")
+            
+        url = st.secrets.supabase.url
+        key = st.secrets.supabase.key
         
-        # Create Supabase client
-        client = create_client(supabase_url, supabase_key)
+        if not url or not key:
+            raise ValueError("Missing Supabase credentials in secrets")
+            
+        # Create and test client
+        client = create_client(url, key)
         
         # Test connection
-        client.table('predicted_funding_rates').select('count', count='exact').limit(1).execute()
-        
+        test_response = client.table('predicted_funding_rates').select('count', count='exact').limit(1).execute()
+        if not test_response:
+            raise ConnectionError("Failed to connect to Supabase")
+            
+        logger.info("Successfully connected to Supabase")
         return client
+        
     except Exception as e:
-        logger.error(f"Failed to initialize Supabase client: {e}")
+        logger.error(f"Failed to initialize Supabase client: {str(e)}")
         return None
 
-# Initialize the client at module level
-supabase_client = init_supabase()
+# Initialize client at module level with better error handling
+try:
+    supabase = init_supabase()
+    if not supabase:
+        st.error("Failed to connect to Supabase. Please check your credentials.")
+except Exception as e:
+    logger.error(f"Error during Supabase initialization: {str(e)}")
+    supabase = None
 
 def get_predicted_rates():
-    """Fetch predicted rates from Supabase with proper error handling"""
+    """Fetch predicted rates from Supabase"""
     try:
-        if not supabase_client:
+        if not supabase:
             logger.error("Supabase client not initialized")
             return pd.DataFrame()
-        
-        # Get most recent predictions for each asset
-        response = supabase_client.table('predicted_funding_rates').select('*').execute()
-        
-        if not response.data:
-            logger.warning("No predicted rates found in Supabase")
+            
+        # Fetch data with error handling
+        try:
+            response = supabase.table('predicted_funding_rates').select('*').execute()
+            
+            if not response.data:
+                logger.warning("No predicted rates found")
+                return pd.DataFrame()
+                
+            df = pd.DataFrame(response.data)
+            
+            # Process timestamps
+            for col in ['next_funding_time', 'created_at', 'timestamp']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], utc=True)
+            
+            # Get latest predictions
+            latest_df = (df.sort_values('created_at', ascending=False)
+                          .groupby('asset')
+                          .first()
+                          .reset_index())
+            
+            # Format output
+            result_df = pd.DataFrame({
+                'symbol': latest_df['asset'].str.upper(),
+                'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,
+                'next_funding_time': latest_df['next_funding_time'],
+                'exchange': latest_df['exchange'],
+                'direction': latest_df['direction']
+            })
+            
+            logger.info(f"Successfully fetched {len(result_df)} predicted rates")
+            return result_df
+            
+        except Exception as e:
+            logger.error(f"Error querying Supabase: {str(e)}")
             return pd.DataFrame()
             
-        df = pd.DataFrame(response.data)
-        
-        # Convert timestamps
-        for col in ['next_funding_time', 'created_at', 'timestamp']:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], utc=True)
-        
-        # Get latest prediction for each asset
-        latest_df = (df.sort_values('created_at', ascending=False)
-                      .groupby('asset')
-                      .first()
-                      .reset_index())
-        
-        # Prepare result DataFrame with standardized columns
-        result_df = pd.DataFrame({
-            'symbol': latest_df['asset'].str.upper(),
-            'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,
-            'next_funding_time': latest_df['next_funding_time'],
-            'exchange': latest_df['exchange'],
-            'direction': latest_df['direction']
-        })
-        
-        logger.info(f"Fetched {len(result_df)} predicted rates")
-        return result_df
-        
     except Exception as e:
-        logger.error(f"Error fetching predicted rates: {e}")
+        logger.error(f"Error in get_predicted_rates: {str(e)}")
         return pd.DataFrame()
 
 def analyze_funding_data():
@@ -162,12 +183,12 @@ def analyze_funding_data():
 def check_supabase_connection():
     """Check Supabase connection and data availability"""
     try:
-        if not supabase_client:
+        if not supabase:
             logger.error("Supabase client not initialized")
             return False
             
         # Test connection with a small query
-        response = (supabase_client.table('predicted_funding_rates')
+        response = (supabase.table('predicted_funding_rates')
             .select('count', count='exact')
             .limit(1)
             .execute())
@@ -437,7 +458,7 @@ def save_config_file(config: dict) -> str:
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
     """Push data to Supabase with better error handling"""
     try:
-        if not supabase_client:
+        if not supabase:
             logger.error("Supabase client not initialized")
             return False
             
@@ -459,7 +480,7 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
             INSERT INTO funding_rates (symbol, exchange, funding_rate, predicted_rate, created_at)
             VALUES :values
             """
-            supabase_client.query(query, values=funding_rates).execute()
+            supabase.query(query, values=funding_rates).execute()
             logger.info(f"Pushed {len(funding_rates)} funding rates")
         except Exception as e:
             logger.error(f"Error pushing funding rates: {e}")
@@ -478,7 +499,7 @@ def health_check():
 def main():
     try:
         # Check Supabase connection first
-        if not supabase_client:
+        if not supabase:
             st.error("Failed to connect to Supabase. Please check your credentials.")
             return
             
