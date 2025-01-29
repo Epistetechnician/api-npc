@@ -94,18 +94,26 @@ class AdvancedFundingAnalyzer:
                                     continue
                                     
                                 symbol = item['symbol'].replace('USDT', '')
+                                funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
+                                predicted_rate = float(item.get('predictedFundingRate', 0)) * 100  # Convert to percentage
+                                
+                                # Calculate annualized rates (8-hour intervals)
+                                annualized_rate = funding_rate * (365 * 3)  # 3 funding periods per day
+                                
                                 formatted_rates.append({
                                     'exchange': 'Binance',
                                     'symbol': symbol,
-                                    'funding_rate': float(item.get('lastFundingRate', 0)),
-                                    'predicted_rate': float(item.get('predictedFundingRate', 0)),
+                                    'funding_rate': funding_rate,
+                                    'predicted_rate': predicted_rate,
                                     'next_funding_time': datetime.fromtimestamp(
                                         int(item.get('nextFundingTime', time.time() * 1000)) / 1000
                                     ),
                                     'mark_price': float(item.get('markPrice', 0)),
                                     'payment_interval': 8,
                                     'volume_24h': 0,
-                                    'timestamp': datetime.now()
+                                    'timestamp': datetime.now(),
+                                    'annualized_rate': annualized_rate,
+                                    'rate_diff': abs(predicted_rate - funding_rate)
                                 })
                             except Exception as e:
                                 logger.warning(f"Error processing item {item}: {e}")
@@ -146,18 +154,26 @@ class AdvancedFundingAnalyzer:
                                 continue
                                 
                             symbol = item['symbol'].replace('USDT', '')
+                            funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
+                            predicted_rate = float(item.get('predictedFundingRate', 0)) * 100  # Convert to percentage
+                            
+                            # Calculate annualized rates (8-hour intervals)
+                            annualized_rate = funding_rate * (365 * 3)  # 3 funding periods per day
+                            
                             formatted_rates.append({
                                 'exchange': 'Binance',
                                 'symbol': symbol,
-                                'funding_rate': float(item.get('lastFundingRate', 0)),
-                                'predicted_rate': float(item.get('predictedFundingRate', 0)),
+                                'funding_rate': funding_rate,
+                                'predicted_rate': predicted_rate,
                                 'next_funding_time': datetime.fromtimestamp(
                                     int(item.get('nextFundingTime', time.time() * 1000)) / 1000
                                 ),
                                 'mark_price': float(item.get('markPrice', 0)),
                                 'payment_interval': 8,
                                 'volume_24h': 0,
-                                'timestamp': datetime.now()
+                                'timestamp': datetime.now(),
+                                'annualized_rate': annualized_rate,
+                                'rate_diff': abs(predicted_rate - funding_rate)
                             })
                         except Exception as e:
                             logger.warning(f"Error processing item {item}: {e}")
@@ -180,27 +196,31 @@ class AdvancedFundingAnalyzer:
     def get_hyperliquid_all_rates(self) -> List[Dict]:
         """Fetch funding rates from Hyperliquid using CCXT"""
         try:
-            # Disable progress display for integration
             formatted_rates = []
             
             try:
-                # Load markets without progress display
                 markets = self.hyperliquid.load_markets()
-                
-                # Fetch funding rates directly
                 funding_rates = self.hyperliquid.fetch_funding_rates()
                 
                 for symbol, data in funding_rates.items():
                     try:
                         base = symbol.split('/')[0]
+                        funding_rate = float(data['fundingRate']) * 100  # Convert to percentage
+                        predicted_rate = float(data.get('predictedRate', 0)) * 100  # Convert to percentage
+                        
+                        # Calculate annualized rates (1-hour intervals)
+                        annualized_rate = funding_rate * (365 * 24)  # 24 funding periods per day
+                        
                         formatted_rates.append({
                             'exchange': 'Hyperliquid',
                             'symbol': base,
-                            'funding_rate': float(data['fundingRate']),
-                            'predicted_rate': float(data.get('predictedRate', 0)),
+                            'funding_rate': funding_rate,
+                            'predicted_rate': predicted_rate,
                             'next_funding_time': datetime.fromtimestamp(data.get('fundingTimestamp', time.time()) / 1000),
                             'mark_price': float(data.get('markPrice', 0)),
-                            'payment_interval': 1
+                            'payment_interval': 1,
+                            'annualized_rate': annualized_rate,
+                            'rate_diff': abs(predicted_rate - funding_rate)
                         })
                     except Exception as e:
                         logger.warning(f"Error processing Hyperliquid rate for {symbol}: {e}")
@@ -285,43 +305,61 @@ class AdvancedFundingAnalyzer:
             return {}
 
     def analyze_funding_opportunities(self) -> pd.DataFrame:
-        """Analyze funding opportunities across exchanges"""
+        """Analyze funding rates and calculate opportunities"""
         try:
-            # Get Hyperliquid rates first with debugging
-            console.print("\n[cyan]Fetching Hyperliquid rates first...[/cyan]")
-            hl_rates = self.get_hyperliquid_all_rates()
-            
-            if not hl_rates:
-                console.print("[red]❌ No Hyperliquid rates available[/red]")
-                return pd.DataFrame()
-            
-            # Debug output for Hyperliquid rates
-            console.print(f"\n[green]✓ Successfully fetched {len(hl_rates)} Hyperliquid rates[/green]")
-            console.print("\nSample Hyperliquid rates:")
-            for rate in hl_rates[:3]:
-                console.print(f"Symbol: {rate['symbol']}, Rate: {rate['funding_rate']}, Predicted: {rate['predicted_rate']}")
-            
-            # Get Binance rates
-            console.print("\n[cyan]Fetching Binance rates...[/cyan]")
+            # Fetch rates from both exchanges
             binance_rates = self.get_binance_all_rates()
-
-            # Combine and process rates
-            all_rates = hl_rates + binance_rates
+            hyperliquid_rates = self.get_hyperliquid_all_rates()
+            
+            # Combine rates
+            all_rates = binance_rates + hyperliquid_rates
+            
             if not all_rates:
-                console.print("[red]❌ No funding rates data available[/red]")
                 return pd.DataFrame()
-
+            
+            # Create DataFrame
             df = pd.DataFrame(all_rates)
-            df['annualized_rate'] = df.apply(
-                lambda x: float(x['funding_rate']) * (365 * 24 / x['payment_interval']) * 100,
-                axis=1
-            )
-
+            
+            # Calculate time to funding
+            df['time_to_funding'] = (df['next_funding_time'] - datetime.now()).dt.total_seconds() / 3600
+            
+            # Calculate opportunity score
+            df['opportunity_score'] = df.apply(lambda x: self._calculate_opportunity_score(
+                funding_rate=x['funding_rate'],
+                predicted_rate=x['predicted_rate'],
+                time_to_funding=x['time_to_funding'],
+                payment_interval=x['payment_interval']
+            ), axis=1)
+            
+            # Add trading direction
+            df['direction'] = df['funding_rate'].apply(lambda x: 'Long' if x < 0 else 'Short')
+            
             return df
-
+            
         except Exception as e:
-            logger.error(f"Error analyzing funding opportunities: {e}")
+            logger.error(f"Error in analyze_funding_opportunities: {e}")
             return pd.DataFrame()
+
+    def _calculate_opportunity_score(self, funding_rate: float, predicted_rate: float, 
+                                   time_to_funding: float, payment_interval: int) -> float:
+        """Calculate opportunity score with proper rate handling"""
+        try:
+            # Normalize rates to hourly basis
+            hourly_rate = funding_rate / payment_interval
+            hourly_predicted = predicted_rate / payment_interval
+            
+            # Calculate score components
+            rate_magnitude = abs(hourly_rate)
+            rate_consistency = 1 - (abs(hourly_rate - hourly_predicted) / (rate_magnitude + 1e-10))
+            time_factor = 1 - (time_to_funding / payment_interval)
+            
+            # Combine components
+            score = rate_magnitude * rate_consistency * time_factor
+            return round(score, 6)
+            
+        except Exception as e:
+            logger.warning(f"Error calculating opportunity score: {e}")
+            return 0.0
 
     def analyze_arbitrage_opportunities(self, comparison_df: pd.DataFrame) -> List[Dict]:
         """Analyze and recommend arbitrage opportunities"""

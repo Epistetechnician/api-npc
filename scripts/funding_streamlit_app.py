@@ -646,7 +646,7 @@ def display_top_opportunities(top_opps):
         
         # Ensure all required columns exist
         display_df['predicted_rate'] = display_df['predicted_rate'].fillna(display_df['funding_rate'])
-        display_df['rate_diff'] = (display_df['predicted_rate'] - display_df['funding_rate']).abs()
+        display_df['rate_diff'] = abs(display_df['predicted_rate'] - display_df['funding_rate'])
         display_df['next_funding'] = display_df['time_to_funding'].apply(
             lambda x: f"{x:.1f}h" if pd.notnull(x) else "8h"
         )
@@ -675,11 +675,11 @@ def display_top_opportunities(top_opps):
             'annualized_rate',
             'opportunity_score'
         ]].style.format({
-            'funding_rate': '{:.6f}',
-            'predicted_rate': '{:.6f}',
-            'rate_diff': '{:.6f}',
+            'funding_rate': '{:.4f}%',  # Show as percentage with 4 decimal places
+            'predicted_rate': '{:.4f}%',
+            'rate_diff': '{:.4f}%',
             'annualized_rate': '{:.2f}%',
-            'opportunity_score': '{:.2f}'
+            'opportunity_score': '{:.4f}'
         }).applymap(style_negative, subset=['funding_rate', 'rate_diff']
         ).applymap(style_opportunity, subset=['opportunity_score'])
         
