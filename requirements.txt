@@ -16,6 +16,7 @@ tabulate>=0.9.0
 
 # API Clients
 python-dateutil==2.8.2
+hyperliquid-python-sdk>=0.9.0
 
 # Task Scheduling
 schedule==1.2.1
