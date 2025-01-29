@@ -56,7 +56,7 @@ def load_environment():
     load_dotenv(override=True)
     
     required_vars = [
-        "NEXT_PUBLIC_SUPABASE_URL",
+        "https://llanxjeohlxpnndhqbdp.supabase.co",
         "NEXT_PUBLIC_SUPABASE_KEY"
     ]
     
@@ -85,19 +85,14 @@ def get_predicted_rates():
             logger.error("Failed to load environment variables")
             return pd.DataFrame()
             
-        supabase_url = env_vars["NEXT_PUBLIC_SUPABASE_URL"]
-        supabase_key = env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
+        supabase_url = "https://llanxjeohlxpnndhqbdp.supabase.co"  # Hardcode URL
+        supabase_key = env_vars.get("NEXT_PUBLIC_SUPABASE_KEY")
         
-        if not supabase_url or not supabase_key:
-            logger.error("Supabase credentials are empty")
+        if not supabase_key:
+            logger.error("Missing Supabase key")
             return pd.DataFrame()
             
         supabase = create_client(supabase_url, supabase_key)
-        
-        # Early validation of Supabase connection
-        if not supabase:
-            logger.error("Failed to initialize Supabase client")
-            return pd.DataFrame()
         
         # Get most recent predictions for each asset
         response = (supabase.table('predicted_funding_rates')
@@ -106,6 +101,7 @@ def get_predicted_rates():
             .execute())
         
         if not response.data:
+            logger.warning("No predicted rates found in Supabase")
             return pd.DataFrame()
             
         df = pd.DataFrame(response.data)
@@ -127,17 +123,60 @@ def get_predicted_rates():
             'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce'),
             'next_funding_time': latest_df['next_funding_time'],
             'exchange': latest_df['exchange'],
-            'direction': latest_df['direction'],
-            'annualized_rate': pd.to_numeric(latest_df['annualized_rate'], errors='coerce')
+            'direction': latest_df['direction']
         })
         
         logger.info(f"Fetched {len(result_df)} predicted rates")
-        logger.info(f"Sample predictions: {result_df[['symbol', 'predicted_rate']].head().to_dict('records')}")
-        
         return result_df
         
     except Exception as e:
         logger.error(f"Error fetching predicted rates: {e}")
+        return pd.DataFrame()
+
+def analyze_funding_data():
+    """Analyze funding rates and merge with predictions"""
+    try:
+        # Initialize analyzer
+        analyzer = AdvancedFundingAnalyzer()
+        
+        # Get current rates
+        df = analyzer.analyze_funding_opportunities()
+        if df.empty:
+            logger.error("No funding rates data available")
+            return pd.DataFrame()
+            
+        # Get predicted rates
+        predicted_df = get_predicted_rates()
+        
+        # Merge current rates with predictions if available
+        if not predicted_df.empty:
+            # Standardize symbol names for joining
+            df['symbol'] = df['symbol'].str.upper()
+            predicted_df['symbol'] = predicted_df['symbol'].str.upper()
+            
+            # Merge on symbol and exchange
+            df = df.merge(
+                predicted_df[['symbol', 'exchange', 'predicted_rate']],
+                on=['symbol', 'exchange'],
+                how='left',
+                suffixes=('', '_pred')
+            )
+            
+            # Update predicted rate where available
+            df['predicted_rate'] = df['predicted_rate_pred'].fillna(df['predicted_rate'])
+            df = df.drop('predicted_rate_pred', axis=1)
+            
+            # Recalculate rate difference
+            df['rate_diff'] = abs(df['predicted_rate'] - df['funding_rate'])
+            
+            logger.info(f"Merged {len(predicted_df)} predictions with {len(df)} current rates")
+        else:
+            logger.warning("No predicted rates available, using current rates")
+            
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error in analyze_funding_data: {e}")
         return pd.DataFrame()
 
 def check_supabase_connection():
@@ -489,67 +528,25 @@ def health_check():
 
 def main():
     try:
-        # Check environment variables first
-        success, env_vars = load_environment()
-        if not success:
-            st.error("Missing required environment variables. Please check your configuration.")
-            st.stop()
-            return
-            
-        # Initialize Supabase client
-        try:
-            supabase = create_client(
-                env_vars["NEXT_PUBLIC_SUPABASE_URL"],
-                env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
-            )
-        except Exception as e:
-            st.error(f"Failed to initialize Supabase client: {str(e)}")
-            logger.error(f"Supabase initialization error: {str(e)}")
-            st.stop()
-            return
-            
-        st.set_page_config(
-            page_title="Funding Rate Analysis",
-            page_icon="📊",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
+        st.title("Funding Rate Analysis")
         
-        # Add version info
-        st.sidebar.text(f"App Version: 1.0.0")
-        st.sidebar.text(f"Python: {sys.version.split()[0]}")
-
-        # Add refresh button and status
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            refresh = st.button("🔄 Refresh Data")
-        with col2:
-            if 'last_update' in st.session_state:
-                st.write(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
-
-        # Run analysis with progress and error handling
-        if 'df' not in st.session_state or refresh:
-            df = fetch_data()
-            if not df.empty:
+        if st.button("🔄 Refresh Data"):
+            with st.spinner("Fetching latest funding rates..."):
+                df = analyze_funding_data()  # Use the new analysis function
+                
+                if df.empty:
+                    st.error("Failed to fetch funding rates data")
+                    return
+                    
                 st.session_state.df = df
                 st.session_state.last_update = datetime.now()
                 st.session_state.stats = calculate_stats(df)
                 
                 # Create visualizations
                 viz_data = create_visualizations(df)
-                
-                # Push data to Supabase
-                with st.spinner("Pushing data to Supabase..."):
-                    if push_to_supabase(df, st.session_state.stats, viz_data):
-                        st.success("Data successfully pushed to Supabase")
-                    else:
-                        st.warning("Failed to push data to Supabase")
-                
                 st.session_state.viz_data = viz_data
-            else:
-                if st.button("Retry"):
-                    st.rerun()
-                return
+                
+                st.success("Data refreshed successfully!")
 
         # Display data if available
         if 'df' in st.session_state and not st.session_state.df.empty:
@@ -688,11 +685,10 @@ def display_top_opportunities(top_opps):
 def display_detailed_view(df):
     """Display enhanced detailed view of all data"""
     if not df.empty:
-        # Prepare display dataframe
         display_df = df.copy()
         
         # Add formatted columns
-        display_df['rate_diff'] = (display_df['predicted_rate'] - display_df['funding_rate']).abs()
+        display_df['rate_diff'] = abs(display_df['predicted_rate'] - display_df['funding_rate'])
         display_df['next_funding'] = display_df['time_to_funding'].apply(
             lambda x: f"{x:.1f}h" if pd.notnull(x) else "8h"
         )
@@ -719,11 +715,11 @@ def display_detailed_view(df):
                 'opportunity_score',
                 'mark_price'
             ]].style.format({
-                'funding_rate': '{:.6f}',
-                'predicted_rate': '{:.6f}',
-                'rate_diff': '{:.6f}',
+                'funding_rate': '{:.4f}%',
+                'predicted_rate': '{:.4f}%',
+                'rate_diff': '{:.4f}%',
                 'annualized_rate': '{:.2f}%',
-                'opportunity_score': '{:.2f}',
+                'opportunity_score': '{:.4f}',
                 'mark_price': '${:,.2f}'
             }).background_gradient(
                 subset=['opportunity_score'],
