@@ -5,7 +5,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from rich.console import Console
 from advanced_funding_analyzer import AdvancedFundingAnalyzer
-from supabase import Client, create_client
+from supabase import create_client, Client
+from postgrest import APIError
 import time
 import logging
 import yaml
@@ -51,19 +52,24 @@ if project_root not in sys.path:
 def init_supabase() -> Client:
     """Initialize Supabase client with error handling"""
     try:
-        url = "https://llanxjeohlxpnndhqbdp.supabase.co"
-        key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
-        
-        client = create_client(url, key)
-        # Test connection
-        client.table('predicted_funding_rates').select('count', count='exact').limit(1).execute()
-        return client
+        # Direct initialization without create_client
+        return Client(
+            supabase_url="https://llanxjeohlxpnndhqbdp.supabase.co",
+            supabase_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+        )
     except Exception as e:
         logger.error(f"Failed to initialize Supabase client: {e}")
         return None
 
-# Initialize the client
-supabase_client = init_supabase()
+# Initialize the client at module level
+try:
+    supabase_client = Client(
+        supabase_url="https://llanxjeohlxpnndhqbdp.supabase.co",
+        supabase_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+    )
+except Exception as e:
+    logger.error(f"Failed to initialize global Supabase client: {e}")
+    supabase_client = None
 
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
@@ -72,41 +78,43 @@ def get_predicted_rates():
             logger.error("Supabase client not initialized")
             return pd.DataFrame()
         
-        # Get most recent predictions for each asset
-        response = (supabase_client.table('predicted_funding_rates')
-            .select('*')
-            .order('created_at', desc=True)
-            .execute())
-        
-        if not response.data:
-            logger.warning("No predicted rates found in Supabase")
+        try:
+            # Get most recent predictions for each asset
+            response = supabase_client.table('predicted_funding_rates').select('*').execute()
+            
+            if not response.data:
+                logger.warning("No predicted rates found in Supabase")
+                return pd.DataFrame()
+                
+            df = pd.DataFrame(response.data)
+            
+            # Convert timestamps
+            for col in ['next_funding_time', 'created_at', 'timestamp']:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], utc=True)
+            
+            # Get latest prediction for each asset
+            latest_df = (df.sort_values('created_at', ascending=False)
+                          .groupby('asset')
+                          .first()
+                          .reset_index())
+            
+            # Prepare result DataFrame with standardized columns
+            result_df = pd.DataFrame({
+                'symbol': latest_df['asset'].str.upper(),
+                'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,  # Convert to percentage
+                'next_funding_time': latest_df['next_funding_time'],
+                'exchange': latest_df['exchange'],
+                'direction': latest_df['direction']
+            })
+            
+            logger.info(f"Fetched {len(result_df)} predicted rates")
+            return result_df
+            
+        except APIError as e:
+            logger.error(f"Supabase API error: {e}")
             return pd.DataFrame()
             
-        df = pd.DataFrame(response.data)
-        
-        # Convert timestamps
-        for col in ['next_funding_time', 'created_at', 'timestamp']:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], utc=True)
-        
-        # Get latest prediction for each asset
-        latest_df = (df.sort_values('created_at', ascending=False)
-                      .groupby('asset')
-                      .first()
-                      .reset_index())
-        
-        # Prepare result DataFrame with standardized columns
-        result_df = pd.DataFrame({
-            'symbol': latest_df['asset'].str.upper(),
-            'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,  # Convert to percentage
-            'next_funding_time': latest_df['next_funding_time'],
-            'exchange': latest_df['exchange'],
-            'direction': latest_df['direction']
-        })
-        
-        logger.info(f"Fetched {len(result_df)} predicted rates")
-        return result_df
-        
     except Exception as e:
         logger.error(f"Error fetching predicted rates: {e}")
         return pd.DataFrame()
