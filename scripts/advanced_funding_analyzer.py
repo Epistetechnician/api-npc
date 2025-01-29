@@ -15,6 +15,7 @@ from hyperliquid.utils import constants
 import aiohttp
 import asyncio
 from rich.table import Table
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -41,14 +42,17 @@ class AdvancedFundingAnalyzer:
             },
             'rateLimit': 100,
             'timeout': 30000,
+            # Use public API endpoints
             'urls': {
                 'api': {
-                    'public': 'https://testnet.binancefuture.com/fapi/v1',  # Use testnet endpoint
-                    'private': 'https://testnet.binancefuture.com/fapi/v1',
+                    'public': 'https://www.binance.com/fapi/v1',
+                    'private': 'https://www.binance.com/fapi/v1',
                 }
             },
             'headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
             }
         })
         
@@ -66,33 +70,47 @@ class AdvancedFundingAnalyzer:
         try:
             console.print("[cyan]Loading Binance markets...[/cyan]")
             
-            # Initialize markets with proper error handling
+            # Use direct API calls if CCXT fails
             try:
                 self.binance.load_markets(reload=True)
             except Exception as e:
-                if "restricted location" in str(e).lower():
-                    logger.warning("Using alternative Binance endpoint")
-                    # Try different endpoints in sequence
-                    endpoints = [
-                        'https://testnet.binancefuture.com/fapi/v1',
-                        'https://fapi.binance.com/fapi/v1',
-                        'https://dapi.binance.com/dapi/v1'
-                    ]
+                logger.warning(f"CCXT market loading failed: {e}")
+                # Fallback to direct API calls
+                try:
+                    # Get funding rates directly
+                    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+                    response = requests.get(url, timeout=10)
+                    data = response.json()
                     
-                    for endpoint in endpoints:
+                    formatted_rates = []
+                    for item in data:
                         try:
-                            self.binance.urls['api'] = {
-                                'public': endpoint,
-                                'private': endpoint
-                            }
-                            self.binance.load_markets(reload=True)
-                            break
-                        except Exception:
+                            symbol = item['symbol'].replace('USDT', '')
+                            formatted_rates.append({
+                                'exchange': 'Binance',
+                                'symbol': symbol,
+                                'funding_rate': float(item['lastFundingRate']),
+                                'predicted_rate': 0.0,  # Not available in this endpoint
+                                'next_funding_time': datetime.fromtimestamp(
+                                    item['nextFundingTime'] / 1000
+                                ),
+                                'mark_price': float(item['markPrice']),
+                                'payment_interval': 8,
+                                'volume_24h': 0,  # Not available in this endpoint
+                                'timestamp': datetime.now()
+                            })
+                        except Exception as e:
+                            logger.warning(f"Error processing {symbol}: {e}")
                             continue
-                    else:
-                        logger.error("All Binance endpoints failed")
-                        return []
-            
+                    
+                    if formatted_rates:
+                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates using direct API[/green]")
+                        return formatted_rates
+                        
+                except Exception as e:
+                    logger.error(f"Direct API call failed: {e}")
+                    return []
+                
             # Filter for USDT perpetual futures only
             markets = [s for s in self.binance.symbols if ':USDT' in s]
             formatted_rates = []

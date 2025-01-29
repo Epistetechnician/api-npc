@@ -418,66 +418,69 @@ def save_config_file(config: dict) -> str:
         return ""
 
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
-    """Push analyzed data to Supabase tables"""
+    """Push data to Supabase with better error handling"""
     try:
-        load_dotenv()
-        supabase = create_client(
-            os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
-        )
+        success, env_vars = load_environment()
+        if not success:
+            logger.error("Failed to load environment variables for Supabase")
+            return False
+            
+        supabase_url = env_vars.get("NEXT_PUBLIC_SUPABASE_URL")
+        supabase_key = env_vars.get("NEXT_PUBLIC_SUPABASE_KEY")
         
-        # Push current market snapshot
-        market_data = df.apply(lambda x: {
+        if not supabase_url or not supabase_key:
+            logger.error("Missing Supabase credentials")
+            return False
+            
+        try:
+            supabase = create_client(supabase_url, supabase_key)
+        except Exception as e:
+            logger.error(f"Failed to create Supabase client: {e}")
+            return False
+            
+        # Only proceed if we have data to push
+        if df.empty:
+            logger.warning("No data to push to Supabase")
+            return False
+            
+        # Push funding rates
+        funding_rates = df.apply(lambda x: {
             'symbol': x['symbol'],
             'exchange': x['exchange'],
             'funding_rate': float(x['funding_rate']),
-            'predicted_rate': float(x['predicted_rate']),
-            'rate_diff': float(abs(x['predicted_rate'] - x['funding_rate'])),
-            'time_to_funding': float(x['time_to_funding']),
-            'direction': x['direction'],
-            'annualized_rate': float(x['annualized_rate']),
-            'opportunity_score': float(x['opportunity_score']),
-            'mark_price': float(x['mark_price']),
-            'suggested_position': "Long" if x['funding_rate'] < 0 else "Short",
-            'created_at': datetime.now().isoformat(),
+            'predicted_rate': float(x.get('predicted_rate', 0)),
+            'created_at': datetime.now().isoformat()
         }, axis=1).tolist()
         
-        # Push market snapshot
-        response = supabase.table('funding_market_snapshots').insert(market_data).execute()
-        logger.info(f"Pushed {len(market_data)} market records")
-        
-        # Push statistics
-        stats_data = {
-            'total_markets': stats['total_markets'],
-            'binance_markets': stats['binance_markets'],
-            'hl_markets': stats['hl_markets'],
-            'hourly_rate': float(stats['hourly_rate']),
-            'eight_hour_rate': float(stats['eight_hour_rate']),
-            'daily_rate': float(stats['daily_rate']),
-            'created_at': datetime.now().isoformat()
-        }
-        
-        response = supabase.table('funding_statistics').insert(stats_data).execute()
-        logger.info("Pushed statistics")
-        
-        # Push top opportunities
-        if 'top_opportunities' in viz_data:
-            top_opps = viz_data['top_opportunities'].apply(lambda x: {
-                'symbol': x['symbol'],
-                'exchange': x['exchange'],
-                'funding_rate': float(x['funding_rate']),
-                'predicted_rate': float(x['predicted_rate']),
-                'opportunity_score': float(x['opportunity_score']),
-                'created_at': datetime.now().isoformat()
-            }, axis=1).tolist()
+        try:
+            response = supabase.table('funding_rates').insert(funding_rates).execute()
+            logger.info(f"Pushed {len(funding_rates)} funding rates")
+        except Exception as e:
+            logger.error(f"Error pushing funding rates: {e}")
+            return False
             
-            response = supabase.table('funding_top_opportunities').insert(top_opps).execute()
-            logger.info(f"Pushed {len(top_opps)} top opportunities")
-        
+        # Push top opportunities if available
+        if viz_data and 'top_opportunities' in viz_data and not viz_data['top_opportunities'].empty:
+            try:
+                top_opps = viz_data['top_opportunities'].apply(lambda x: {
+                    'symbol': x['symbol'],
+                    'exchange': x['exchange'],
+                    'funding_rate': float(x['funding_rate']),
+                    'predicted_rate': float(x['predicted_rate']),
+                    'opportunity_score': float(x['opportunity_score']),
+                    'created_at': datetime.now().isoformat()
+                }, axis=1).tolist()
+                
+                response = supabase.table('funding_top_opportunities').insert(top_opps).execute()
+                logger.info(f"Pushed {len(top_opps)} top opportunities")
+            except Exception as e:
+                logger.error(f"Error pushing top opportunities: {e}")
+                # Continue even if top opportunities push fails
+                
         return True
         
     except Exception as e:
-        logger.error(f"Error pushing to Supabase: {e}")
+        logger.error(f"Error in push_to_supabase: {e}")
         return False
 
 def health_check():
