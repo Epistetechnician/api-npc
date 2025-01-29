@@ -5,8 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from rich.console import Console
 from advanced_funding_analyzer import AdvancedFundingAnalyzer
-from supabase.client import Client, create_client
-from postgrest import APIError
+from st_supabase_connection import SupabaseConnection
 import time
 import logging
 import yaml
@@ -48,17 +47,31 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Remove the init_supabase function and directly initialize the client
-supabase_client = create_client(
-    supabase_url="https://llanxjeohlxpnndhqbdp.supabase.co",
-    supabase_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
-)
+# Initialize Supabase connection
+def init_supabase():
+    """Initialize Supabase connection using Streamlit secrets"""
+    try:
+        return st.connection('supabase', type=SupabaseConnection)
+    except Exception as e:
+        logger.error(f"Failed to initialize Supabase connection: {e}")
+        return None
+
+# Get Supabase connection
+supabase = init_supabase()
 
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
     try:
+        if not supabase:
+            logger.error("Supabase connection not initialized")
+            return pd.DataFrame()
+            
         # Get most recent predictions for each asset
-        response = supabase_client.table('predicted_funding_rates').select('*').execute()
+        query = """
+        SELECT * FROM predicted_funding_rates 
+        ORDER BY created_at DESC
+        """
+        response = supabase.query(query).execute()
         
         if not response.data:
             logger.warning("No predicted rates found in Supabase")
@@ -80,7 +93,7 @@ def get_predicted_rates():
         # Prepare result DataFrame with standardized columns
         result_df = pd.DataFrame({
             'symbol': latest_df['asset'].str.upper(),
-            'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,  # Convert to percentage
+            'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,
             'next_funding_time': latest_df['next_funding_time'],
             'exchange': latest_df['exchange'],
             'direction': latest_df['direction']
@@ -142,12 +155,12 @@ def analyze_funding_data():
 def check_supabase_connection():
     """Check Supabase connection and data availability"""
     try:
-        if not supabase_client:
-            logger.error("Supabase client not initialized")
+        if not supabase:
+            logger.error("Supabase connection not initialized")
             return False
             
         # Test connection with a small query
-        response = (supabase_client.table('predicted_funding_rates')
+        response = (supabase.table('predicted_funding_rates')
             .select('count', count='exact')
             .limit(1)
             .execute())
@@ -417,11 +430,10 @@ def save_config_file(config: dict) -> str:
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
     """Push data to Supabase with better error handling"""
     try:
-        if not supabase_client:
-            logger.error("Supabase client not initialized")
+        if not supabase:
+            logger.error("Supabase connection not initialized")
             return False
             
-        # Only proceed if we have data to push
         if df.empty:
             logger.warning("No data to push to Supabase")
             return False
@@ -436,29 +448,16 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
         }, axis=1).tolist()
         
         try:
-            response = supabase_client.table('funding_rates').insert(funding_rates).execute()
+            query = """
+            INSERT INTO funding_rates (symbol, exchange, funding_rate, predicted_rate, created_at)
+            VALUES :values
+            """
+            supabase.query(query, values=funding_rates).execute()
             logger.info(f"Pushed {len(funding_rates)} funding rates")
         except Exception as e:
             logger.error(f"Error pushing funding rates: {e}")
             return False
             
-        # Push top opportunities if available
-        if viz_data and 'top_opportunities' in viz_data and not viz_data['top_opportunities'].empty:
-            try:
-                top_opps = viz_data['top_opportunities'].apply(lambda x: {
-                    'symbol': x['symbol'],
-                    'exchange': x['exchange'],
-                    'funding_rate': float(x['funding_rate']),
-                    'predicted_rate': float(x['predicted_rate']),
-                    'opportunity_score': float(x['opportunity_score']),
-                    'created_at': datetime.now().isoformat()
-                }, axis=1).tolist()
-                
-                response = supabase_client.table('funding_top_opportunities').insert(top_opps).execute()
-                logger.info(f"Pushed {len(top_opps)} top opportunities")
-            except Exception as e:
-                logger.error(f"Error pushing top opportunities: {e}")
-                
         return True
         
     except Exception as e:
