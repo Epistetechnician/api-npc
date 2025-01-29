@@ -464,40 +464,39 @@ def save_config_file(config: dict) -> str:
         return ""
 
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
-    """Push data to Supabase with better error handling"""
+    """Push data to Supabase with transaction handling"""
     try:
-        if not supabase:
-            logger.error("Supabase client not initialized")
+        if not st.session_state.supabase:
+            logger.error("Supabase client not in session state")
             return False
             
         if df.empty:
-            logger.warning("No data to push to Supabase")
+            logger.warning("No data to push")
             return False
-            
-        # Push funding rates
-        funding_rates = df.apply(lambda x: {
-            'symbol': x['symbol'],
-            'exchange': x['exchange'],
-            'funding_rate': float(x['funding_rate']),
-            'predicted_rate': float(x.get('predicted_rate', 0)),
-            'created_at': datetime.now().isoformat()
-        }, axis=1).tolist()
+
+        # Convert DataFrame to list of dicts
+        records = df[['symbol', 'exchange', 'funding_rate', 'predicted_rate']].to_dict('records')
         
+        # Insert with error handling
         try:
-            query = """
-            INSERT INTO funding_rates (symbol, exchange, funding_rate, predicted_rate, created_at)
-            VALUES :values
-            """
-            supabase.query(query, values=funding_rates).execute()
-            logger.info(f"Pushed {len(funding_rates)} funding rates")
+            response = (st.session_state.supabase
+                        .table('funding_rates')
+                        .insert(records)
+                        .execute())
+            
+            if not response.data:
+                logger.error("Empty response from Supabase insert")
+                return False
+                
+            logger.info(f"Inserted {len(response.data)} records")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error pushing funding rates: {e}")
+            logger.error(f"Supabase insert failed: {str(e)}")
             return False
             
-        return True
-        
     except Exception as e:
-        logger.error(f"Error in push_to_supabase: {e}")
+        logger.error(f"Push failed: {str(e)}")
         return False
 
 def health_check():
@@ -509,6 +508,11 @@ def main():
         # Initialize Supabase connection
         if 'supabase' not in st.session_state:
             st.session_state.supabase = init_supabase()
+            if st.session_state.supabase:
+                logger.info("Supabase client stored in session state")
+            else:
+                st.error("Critical error: Supabase connection failed. Check logs and secrets.")
+                st.stop()  # Stop execution if no connection
             
         if not st.session_state.supabase:
             st.error("Critical error: Supabase connection failed. Check logs and secrets.")
