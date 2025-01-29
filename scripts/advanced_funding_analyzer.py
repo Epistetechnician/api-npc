@@ -31,7 +31,7 @@ class AdvancedFundingAnalyzer:
         self.binance = ccxt.binance({
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future',  # Use futures endpoint
+                'defaultType': 'future',
                 'adjustForTimeDifference': True,
                 'defaultNetwork': 'BSC',
                 'recvWindow': 60000,
@@ -39,13 +39,16 @@ class AdvancedFundingAnalyzer:
                     'limit': 1000,
                 }
             },
-            'rateLimit': 100,  # Milliseconds between requests
-            'timeout': 30000,  # 30 seconds
+            'rateLimit': 100,
+            'timeout': 30000,
             'urls': {
                 'api': {
-                    'public': 'https://fapi.binance.com/fapi/v1',
-                    'private': 'https://fapi.binance.com/fapi/v1',
+                    'public': 'https://testnet.binancefuture.com/fapi/v1',  # Use testnet endpoint
+                    'private': 'https://testnet.binancefuture.com/fapi/v1',
                 }
+            },
+            'headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         })
         
@@ -65,15 +68,30 @@ class AdvancedFundingAnalyzer:
             
             # Initialize markets with proper error handling
             try:
-                self.binance.load_markets(reload=True)  # Force reload markets
+                self.binance.load_markets(reload=True)
             except Exception as e:
                 if "restricted location" in str(e).lower():
                     logger.warning("Using alternative Binance endpoint")
-                    self.binance.urls['api'] = {
-                        'public': 'https://fapi.binance.com/fapi/v1',
-                        'private': 'https://fapi.binance.com/fapi/v1',
-                    }
-                    self.binance.load_markets(reload=True)
+                    # Try different endpoints in sequence
+                    endpoints = [
+                        'https://testnet.binancefuture.com/fapi/v1',
+                        'https://fapi.binance.com/fapi/v1',
+                        'https://dapi.binance.com/dapi/v1'
+                    ]
+                    
+                    for endpoint in endpoints:
+                        try:
+                            self.binance.urls['api'] = {
+                                'public': endpoint,
+                                'private': endpoint
+                            }
+                            self.binance.load_markets(reload=True)
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        logger.error("All Binance endpoints failed")
+                        return []
             
             # Filter for USDT perpetual futures only
             markets = [s for s in self.binance.symbols if ':USDT' in s]

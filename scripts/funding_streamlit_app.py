@@ -52,12 +52,12 @@ if project_root not in sys.path:
 # Environment variables
 def load_environment():
     """Load environment variables from .env file or environment"""
-    load_dotenv()
+    # Force reload environment variables
+    load_dotenv(override=True)
     
     required_vars = [
         "NEXT_PUBLIC_SUPABASE_URL",
-        "NEXT_PUBLIC_SUPABASE_KEY",
-        "USE_BINANCE_GLOBAL"
+        "NEXT_PUBLIC_SUPABASE_KEY"
     ]
     
     env_vars = {}
@@ -70,7 +70,9 @@ def load_environment():
         env_vars[var] = value
     
     if missing_vars:
-        st.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+        logger.error(error_msg)
+        st.error(error_msg)
         return False, {}
         
     return True, env_vars
@@ -80,12 +82,17 @@ def get_predicted_rates():
     try:
         success, env_vars = load_environment()
         if not success:
+            logger.error("Failed to load environment variables")
             return pd.DataFrame()
             
-        supabase = create_client(
-            env_vars["NEXT_PUBLIC_SUPABASE_URL"],
-            env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
-        )
+        supabase_url = env_vars["NEXT_PUBLIC_SUPABASE_URL"]
+        supabase_key = env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
+        
+        if not supabase_url or not supabase_key:
+            logger.error("Supabase credentials are empty")
+            return pd.DataFrame()
+            
+        supabase = create_client(supabase_url, supabase_key)
         
         # Early validation of Supabase connection
         if not supabase:
@@ -487,11 +494,17 @@ def main():
             return
             
         # Initialize Supabase client
-        supabase = create_client(
-            env_vars["NEXT_PUBLIC_SUPABASE_URL"],
-            env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
-        )
-        
+        try:
+            supabase = create_client(
+                env_vars["NEXT_PUBLIC_SUPABASE_URL"],
+                env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
+            )
+        except Exception as e:
+            st.error(f"Failed to initialize Supabase client: {str(e)}")
+            logger.error(f"Supabase initialization error: {str(e)}")
+            st.stop()
+            return
+            
         st.set_page_config(
             page_title="Funding Rate Analysis",
             page_icon="📊",
