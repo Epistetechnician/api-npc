@@ -50,31 +50,39 @@ if project_root not in sys.path:
 
 # Initialize Supabase client
 def init_supabase():
-    """Initialize Supabase client with proper error handling"""
+    """Initialize Supabase client with enhanced error handling"""
     try:
-        # Get credentials directly from Streamlit secrets
-        if 'supabase' not in st.secrets:
-            raise ValueError("Supabase configuration not found in secrets")
-            
-        url = st.secrets.supabase.url
-        key = st.secrets.supabase.key
+        if not hasattr(st.secrets, 'supabase'):
+            logger.error("Supabase secrets not configured")
+            st.error("❌ Supabase configuration missing in Streamlit secrets")
+            return None
+
+        url = st.secrets.supabase.get('url')
+        key = st.secrets.supabase.get('key')
         
         if not url or not key:
-            raise ValueError("Missing Supabase credentials in secrets")
-            
-        # Create and test client
+            logger.error("Invalid Supabase credentials")
+            st.error("🔑 Invalid Supabase credentials in secrets")
+            return None
+
         client = create_client(url, key)
         
-        # Test connection
-        test_response = client.table('predicted_funding_rates').select('count', count='exact').limit(1).execute()
-        if not test_response:
-            raise ConnectionError("Failed to connect to Supabase")
+        # Validate connection
+        try:
+            test = client.table('predicted_funding_rates').select("count", count='exact').limit(1).execute()
+            if not test or 'count' not in test:
+                raise ConnectionError("Connection test failed")
+        except Exception as e:
+            logger.error(f"Connection test failed: {str(e)}")
+            st.error("🔌 Could not connect to Supabase - check network access")
+            return None
             
-        logger.info("Successfully connected to Supabase")
+        logger.info("Supabase connection established")
         return client
         
     except Exception as e:
-        logger.error(f"Failed to initialize Supabase client: {str(e)}")
+        logger.error(f"Supabase init failed: {str(e)}")
+        st.error(f"🚨 Supabase initialization error: {str(e)}")
         return None
 
 # Initialize client at module level with better error handling
@@ -498,11 +506,15 @@ def health_check():
 
 def main():
     try:
-        # Check Supabase connection first
-        if not supabase:
-            st.error("Failed to connect to Supabase. Please check your credentials.")
-            return
+        # Initialize Supabase connection
+        if 'supabase' not in st.session_state:
+            st.session_state.supabase = init_supabase()
             
+        if not st.session_state.supabase:
+            st.error("Critical error: Supabase connection failed. Check logs and secrets.")
+            return
+
+        # Rest of main function remains the same
         st.title("Funding Rate Analysis")
         
         if st.button("🔄 Refresh Data"):
