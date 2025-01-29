@@ -42,20 +42,10 @@ class AdvancedFundingAnalyzer:
             },
             'rateLimit': 100,
             'timeout': 30000,
-            'urls': {
-                'api': {
-                    'public': 'https://fapi.binance.com/fapi/v1',
-                    'private': 'https://fapi.binance.com/fapi/v1',
-                }
-            },
             'headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
                 'Content-Type': 'application/json'
-            },
-            'proxies': {
-                'http': 'http://proxy.scrapingbee.com:8886',  # We'll use a proxy service
-                'https': 'http://proxy.scrapingbee.com:8886'
             }
         })
         
@@ -73,22 +63,77 @@ class AdvancedFundingAnalyzer:
         try:
             console.print("[cyan]Loading Binance markets...[/cyan]")
             
-            # Try direct API call first
+            # Try using public API endpoints
+            endpoints = [
+                "https://api.allorigins.win/raw?url=https://fapi.binance.com/fapi/v1/premiumIndex",
+                "https://api.codetabs.com/v1/proxy?quest=https://fapi.binance.com/fapi/v1/premiumIndex",
+                "https://cors-anywhere.herokuapp.com/https://fapi.binance.com/fapi/v1/premiumIndex"
+            ]
+            
+            for proxy_url in endpoints:
+                try:
+                    response = requests.get(
+                        proxy_url,
+                        timeout=15,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0',
+                            'Accept': 'application/json'
+                        }
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        formatted_rates = []
+                        
+                        for item in data:
+                            try:
+                                if not isinstance(item, dict) or 'symbol' not in item:
+                                    continue
+                                    
+                                if not item['symbol'].endswith('USDT'):
+                                    continue
+                                    
+                                symbol = item['symbol'].replace('USDT', '')
+                                formatted_rates.append({
+                                    'exchange': 'Binance',
+                                    'symbol': symbol,
+                                    'funding_rate': float(item.get('lastFundingRate', 0)),
+                                    'predicted_rate': float(item.get('predictedFundingRate', 0)),
+                                    'next_funding_time': datetime.fromtimestamp(
+                                        int(item.get('nextFundingTime', time.time() * 1000)) / 1000
+                                    ),
+                                    'mark_price': float(item.get('markPrice', 0)),
+                                    'payment_interval': 8,
+                                    'volume_24h': 0,
+                                    'timestamp': datetime.now()
+                                })
+                            except Exception as e:
+                                logger.warning(f"Error processing item {item}: {e}")
+                                continue
+                        
+                        if formatted_rates:
+                            console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates[/green]")
+                            return formatted_rates
+                            
+                except Exception as e:
+                    logger.warning(f"Proxy endpoint {proxy_url} failed: {e}")
+                    continue
+            
+            # If all proxies fail, try direct API call with VPN headers
             try:
-                # Get funding rates directly using requests with proxy
-                proxy_url = "https://api.allorigins.win/raw?url="
-                target_url = "https://fapi.binance.com/fapi/v1/premiumIndex"
-                
                 response = requests.get(
-                    proxy_url + target_url,
+                    "https://fapi.binance.com/fapi/v1/premiumIndex",
                     timeout=15,
                     headers={
-                        'User-Agent': 'Mozilla/5.0',
-                        'Accept': 'application/json'
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': 'application/json',
+                        'X-Forwarded-For': '8.8.8.8',  # Google DNS IP
+                        'Origin': 'https://www.binance.com'
                     }
                 )
                 
                 if response.status_code == 200:
+                    # Process response same as above...
                     data = response.json()
                     formatted_rates = []
                     
@@ -119,58 +164,11 @@ class AdvancedFundingAnalyzer:
                             continue
                     
                     if formatted_rates:
-                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates using proxy[/green]")
-                        # Display sample rates
-                        for rate in formatted_rates[:3]:
-                            console.print(
-                                f"Symbol: {rate['symbol']}, "
-                                f"Rate: {rate['funding_rate']:.6f}, "
-                                f"Predicted: {rate['predicted_rate']:.6f}"
-                            )
+                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates directly[/green]")
                         return formatted_rates
                         
-                else:
-                    logger.warning(f"Direct API call failed with status code: {response.status_code}")
-                    
             except Exception as e:
-                logger.warning(f"Direct API call failed: {e}")
-            
-            # If direct API call fails, try CCXT with proxy
-            try:
-                self.binance.load_markets(reload=True)
-                markets = [s for s in self.binance.symbols if ':USDT' in s]
-                formatted_rates = []
-                
-                for symbol in markets:
-                    try:
-                        funding_info = self.binance.fetch_funding_rate(symbol)
-                        base = symbol.split(':')[0].replace('/USDT', '')
-                        
-                        formatted_rates.append({
-                            'exchange': 'Binance',
-                            'symbol': base,
-                            'funding_rate': float(funding_info['fundingRate']),
-                            'predicted_rate': float(funding_info.get('predictedFundingRate', 0)),
-                            'next_funding_time': datetime.fromtimestamp(
-                                funding_info['fundingTimestamp'] / 1000
-                            ),
-                            'mark_price': float(funding_info.get('markPrice', 0)),
-                            'payment_interval': 8,
-                            'volume_24h': 0,
-                            'timestamp': datetime.now()
-                        })
-                        
-                        time.sleep(0.1)  # Rate limiting
-                        
-                    except Exception as e:
-                        logger.warning(f"Error processing {symbol}: {e}")
-                        continue
-                
-                if formatted_rates:
-                    return formatted_rates
-                    
-            except Exception as e:
-                logger.error(f"CCXT approach failed: {e}")
+                logger.error(f"Direct API call failed: {e}")
             
             logger.error("All attempts to fetch Binance rates failed")
             return []
