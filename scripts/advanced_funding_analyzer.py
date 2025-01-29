@@ -26,28 +26,29 @@ console = Console()
 
 class AdvancedFundingAnalyzer:
     def __init__(self):
-        # Initialize exchanges with proper configuration
+        """Initialize exchange connections with proper configuration"""
+        # Initialize Binance with CCXT
         self.binance = ccxt.binance({
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future',
+                'defaultType': 'future',  # Use futures endpoint
                 'adjustForTimeDifference': True,
                 'defaultNetwork': 'BSC',
                 'recvWindow': 60000,
+                'fetchFundingRateHistory': {
+                    'limit': 1000,
+                }
             },
-            'proxies': {
-                'http': os.getenv('HTTP_PROXY', ''),
-                'https': os.getenv('HTTPS_PROXY', '')
+            'rateLimit': 100,  # Milliseconds between requests
+            'timeout': 30000,  # 30 seconds
+            'urls': {
+                'api': {
+                    'public': 'https://fapi.binance.com/fapi/v1',
+                    'private': 'https://fapi.binance.com/fapi/v1',
+                }
             }
         })
         
-        # Use API endpoints that work globally
-        if os.getenv('USE_BINANCE_GLOBAL', 'true').lower() == 'true':
-            self.binance.urls['api'] = {
-                'public': 'https://fapi.binance.com/fapi/v1',
-                'private': 'https://fapi.binance.com/fapi/v1',
-            }
-
         # Use CCXT for Hyperliquid
         self.hyperliquid = ccxt.hyperliquid({
             'enableRateLimit': True,
@@ -62,24 +63,21 @@ class AdvancedFundingAnalyzer:
         try:
             console.print("[cyan]Loading Binance markets...[/cyan]")
             
-            # Add error handling for region restrictions
+            # Initialize markets with proper error handling
             try:
-                self.binance.load_markets()
+                self.binance.load_markets(reload=True)  # Force reload markets
             except Exception as e:
                 if "restricted location" in str(e).lower():
-                    logger.warning("Using alternative Binance endpoint due to region restriction")
+                    logger.warning("Using alternative Binance endpoint")
                     self.binance.urls['api'] = {
                         'public': 'https://fapi.binance.com/fapi/v1',
                         'private': 'https://fapi.binance.com/fapi/v1',
                     }
-                    try:
-                        self.binance.load_markets()
-                    except Exception as e:
-                        logger.error(f"Failed to load Binance markets: {e}")
-                        return []
+                    self.binance.load_markets(reload=True)
             
+            # Filter for USDT perpetual futures only
+            markets = [s for s in self.binance.symbols if ':USDT' in s]
             formatted_rates = []
-            markets = [s for s in self.binance.symbols if s.endswith(':USDT')]
             
             with Progress(
                 SpinnerColumn(),
@@ -91,30 +89,57 @@ class AdvancedFundingAnalyzer:
                 
                 for symbol in markets:
                     try:
-                        funding_rate = self.binance.fetch_funding_rate(symbol)
+                        # Fetch funding rate with proper error handling
+                        funding_info = self.binance.fetch_funding_rate(symbol)
+                        mark_price = self.binance.fetch_ticker(symbol)
                         
-                        base = symbol.split('/')[0].replace(':USDT', '')
-                        formatted_rates.append({
+                        # Extract base symbol
+                        base = symbol.split(':')[0].replace('/USDT', '')
+                        
+                        # Format the rate data
+                        rate_data = {
                             'exchange': 'Binance',
                             'symbol': base,
-                            'funding_rate': float(funding_rate['fundingRate']),
-                            'predicted_rate': float(funding_rate.get('predictedFundingRate', 0)),
-                            'next_funding_time': datetime.fromtimestamp(funding_rate['fundingTimestamp'] / 1000),
-                            'mark_price': float(funding_rate.get('markPrice', 0)),
-                            'payment_interval': 8
-                        })
+                            'funding_rate': float(funding_info['fundingRate']),
+                            'predicted_rate': float(funding_info.get('predictedFundingRate', 0)),
+                            'next_funding_time': datetime.fromtimestamp(
+                                funding_info['fundingTimestamp'] / 1000
+                            ),
+                            'mark_price': float(mark_price['last'] if mark_price else 0),
+                            'payment_interval': 8,  # Binance uses 8-hour intervals
+                            'volume_24h': float(mark_price.get('quoteVolume', 0)),
+                            'timestamp': datetime.fromtimestamp(
+                                funding_info['timestamp'] / 1000
+                            )
+                        }
+                        
+                        formatted_rates.append(rate_data)
                         progress.update(task, advance=1)
-                        time.sleep(self.binance.rateLimit / 1000)  # Respect rate limits
+                        
+                        # Respect rate limits
+                        time.sleep(self.binance.rateLimit / 1000)
                         
                     except Exception as e:
-                        logger.warning(f"Error processing Binance rate for {symbol}: {e}")
+                        logger.warning(f"Error processing {symbol}: {str(e)}")
                         progress.update(task, advance=1)
                         continue
+            
+            if formatted_rates:
+                console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates[/green]")
+                # Display sample rates for verification
+                for rate in formatted_rates[:3]:
+                    console.print(
+                        f"Symbol: {rate['symbol']}, "
+                        f"Rate: {rate['funding_rate']:.6f}, "
+                        f"Predicted: {rate['predicted_rate']:.6f}"
+                    )
+            else:
+                console.print("[red]No Binance rates were fetched[/red]")
             
             return formatted_rates
             
         except Exception as e:
-            logger.error(f"Error fetching Binance rates: {e}")
+            logger.error(f"Error fetching Binance rates: {str(e)}")
             return []
 
     def get_hyperliquid_all_rates(self) -> List[Dict]:
