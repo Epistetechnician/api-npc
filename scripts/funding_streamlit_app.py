@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from rich.console import Console
 from advanced_funding_analyzer import AdvancedFundingAnalyzer
-from supabase import create_client
+from supabase import Client, create_client
 import time
 import logging
 import yaml
@@ -48,24 +48,32 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Initialize Supabase client globally
-SUPABASE_URL = "https://llanxjeohlxpnndhqbdp.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+def init_supabase() -> Client:
+    """Initialize Supabase client with error handling"""
+    try:
+        url = "https://llanxjeohlxpnndhqbdp.supabase.co"
+        key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+        
+        client = create_client(url, key)
+        # Test connection
+        client.table('predicted_funding_rates').select('count', count='exact').limit(1).execute()
+        return client
+    except Exception as e:
+        logger.error(f"Failed to initialize Supabase client: {e}")
+        return None
 
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    logger.error(f"Failed to initialize Supabase client: {e}")
-    supabase = None
+# Initialize the client
+supabase_client = init_supabase()
 
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
     try:
-        if not supabase:
+        if not supabase_client:
             logger.error("Supabase client not initialized")
             return pd.DataFrame()
         
         # Get most recent predictions for each asset
-        response = (supabase.table('predicted_funding_rates')
+        response = (supabase_client.table('predicted_funding_rates')
             .select('*')
             .order('created_at', desc=True)
             .execute())
@@ -152,12 +160,12 @@ def analyze_funding_data():
 def check_supabase_connection():
     """Check Supabase connection and data availability"""
     try:
-        if not supabase:
+        if not supabase_client:
             logger.error("Supabase client not initialized")
             return False
             
         # Test connection with a small query
-        response = (supabase.table('predicted_funding_rates')
+        response = (supabase_client.table('predicted_funding_rates')
             .select('count', count='exact')
             .limit(1)
             .execute())
@@ -427,6 +435,10 @@ def save_config_file(config: dict) -> str:
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
     """Push data to Supabase with better error handling"""
     try:
+        if not supabase_client:
+            logger.error("Supabase client not initialized")
+            return False
+            
         # Only proceed if we have data to push
         if df.empty:
             logger.warning("No data to push to Supabase")
@@ -442,7 +454,7 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
         }, axis=1).tolist()
         
         try:
-            response = supabase.table('funding_rates').insert(funding_rates).execute()
+            response = supabase_client.table('funding_rates').insert(funding_rates).execute()
             logger.info(f"Pushed {len(funding_rates)} funding rates")
         except Exception as e:
             logger.error(f"Error pushing funding rates: {e}")
@@ -460,11 +472,10 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
                     'created_at': datetime.now().isoformat()
                 }, axis=1).tolist()
                 
-                response = supabase.table('funding_top_opportunities').insert(top_opps).execute()
+                response = supabase_client.table('funding_top_opportunities').insert(top_opps).execute()
                 logger.info(f"Pushed {len(top_opps)} top opportunities")
             except Exception as e:
                 logger.error(f"Error pushing top opportunities: {e}")
-                # Continue even if top opportunities push fails
                 
         return True
         
