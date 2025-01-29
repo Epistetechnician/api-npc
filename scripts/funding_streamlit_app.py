@@ -6,8 +6,6 @@ import plotly.express as px
 from rich.console import Console
 from advanced_funding_analyzer import AdvancedFundingAnalyzer
 from supabase import create_client
-import os
-from dotenv import load_dotenv
 import time
 import logging
 import yaml
@@ -49,49 +47,13 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Environment variables
-def load_environment():
-    """Load environment variables from .env file or environment"""
-    # Force reload environment variables
-    load_dotenv(override=True)
-    
-    required_vars = [
-        "https://llanxjeohlxpnndhqbdp.supabase.co",
-        "NEXT_PUBLIC_SUPABASE_KEY"
-    ]
-    
-    env_vars = {}
-    missing_vars = []
-    
-    for var in required_vars:
-        value = os.getenv(var)
-        if not value:
-            missing_vars.append(var)
-        env_vars[var] = value
-    
-    if missing_vars:
-        error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
-        logger.error(error_msg)
-        st.error(error_msg)
-        return False, {}
-        
-    return True, env_vars
-
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
     try:
-        success, env_vars = load_environment()
-        if not success:
-            logger.error("Failed to load environment variables")
-            return pd.DataFrame()
-            
-        supabase_url = "https://llanxjeohlxpnndhqbdp.supabase.co"  # Hardcode URL
-        supabase_key = env_vars.get("NEXT_PUBLIC_SUPABASE_KEY")
+        # Hardcode both Supabase credentials
+        supabase_url = "https://llanxjeohlxpnndhqbdp.supabase.co"
+        supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
         
-        if not supabase_key:
-            logger.error("Missing Supabase key")
-            return pd.DataFrame()
-            
         supabase = create_client(supabase_url, supabase_key)
         
         # Get most recent predictions for each asset
@@ -182,12 +144,6 @@ def analyze_funding_data():
 def check_supabase_connection():
     """Check Supabase connection and data availability before fetching exchange data"""
     try:
-        load_dotenv()
-        supabase = create_client(
-            os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
-        )
-        
         # Test connection with a small query
         response = (supabase.table('predicted_funding_rates')
             .select('count', count='exact')
@@ -459,24 +415,6 @@ def save_config_file(config: dict) -> str:
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
     """Push data to Supabase with better error handling"""
     try:
-        success, env_vars = load_environment()
-        if not success:
-            logger.error("Failed to load environment variables for Supabase")
-            return False
-            
-        supabase_url = env_vars.get("NEXT_PUBLIC_SUPABASE_URL")
-        supabase_key = env_vars.get("NEXT_PUBLIC_SUPABASE_KEY")
-        
-        if not supabase_url or not supabase_key:
-            logger.error("Missing Supabase credentials")
-            return False
-            
-        try:
-            supabase = create_client(supabase_url, supabase_key)
-        except Exception as e:
-            logger.error(f"Failed to create Supabase client: {e}")
-            return False
-            
         # Only proceed if we have data to push
         if df.empty:
             logger.warning("No data to push to Supabase")
