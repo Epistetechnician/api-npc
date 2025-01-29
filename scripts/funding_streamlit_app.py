@@ -12,6 +12,7 @@ import yaml
 from pathlib import Path
 import sys
 import logging.config
+from supabase import create_client
 
 # Configure logging
 logging.config.dictConfig({
@@ -51,27 +52,33 @@ if project_root not in sys.path:
 def init_supabase():
     """Initialize Supabase connection using Streamlit secrets"""
     try:
-        return st.connection('supabase', type=SupabaseConnection)
+        # Get credentials from Streamlit secrets
+        supabase_url = st.secrets["connections"]["supabase"]["url"]
+        supabase_key = st.secrets["connections"]["supabase"]["key"]
+        
+        # Create Supabase client
+        client = create_client(supabase_url, supabase_key)
+        
+        # Test connection
+        client.table('predicted_funding_rates').select('count', count='exact').limit(1).execute()
+        
+        return client
     except Exception as e:
-        logger.error(f"Failed to initialize Supabase connection: {e}")
+        logger.error(f"Failed to initialize Supabase client: {e}")
         return None
 
-# Get Supabase connection
-supabase = init_supabase()
+# Initialize the client at module level
+supabase_client = init_supabase()
 
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
     try:
-        if not supabase:
-            logger.error("Supabase connection not initialized")
+        if not supabase_client:
+            logger.error("Supabase client not initialized")
             return pd.DataFrame()
-            
+        
         # Get most recent predictions for each asset
-        query = """
-        SELECT * FROM predicted_funding_rates 
-        ORDER BY created_at DESC
-        """
-        response = supabase.query(query).execute()
+        response = supabase_client.table('predicted_funding_rates').select('*').execute()
         
         if not response.data:
             logger.warning("No predicted rates found in Supabase")
@@ -155,12 +162,12 @@ def analyze_funding_data():
 def check_supabase_connection():
     """Check Supabase connection and data availability"""
     try:
-        if not supabase:
-            logger.error("Supabase connection not initialized")
+        if not supabase_client:
+            logger.error("Supabase client not initialized")
             return False
             
         # Test connection with a small query
-        response = (supabase.table('predicted_funding_rates')
+        response = (supabase_client.table('predicted_funding_rates')
             .select('count', count='exact')
             .limit(1)
             .execute())
@@ -430,8 +437,8 @@ def save_config_file(config: dict) -> str:
 def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
     """Push data to Supabase with better error handling"""
     try:
-        if not supabase:
-            logger.error("Supabase connection not initialized")
+        if not supabase_client:
+            logger.error("Supabase client not initialized")
             return False
             
         if df.empty:
@@ -452,7 +459,7 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
             INSERT INTO funding_rates (symbol, exchange, funding_rate, predicted_rate, created_at)
             VALUES :values
             """
-            supabase.query(query, values=funding_rates).execute()
+            supabase_client.query(query, values=funding_rates).execute()
             logger.info(f"Pushed {len(funding_rates)} funding rates")
         except Exception as e:
             logger.error(f"Error pushing funding rates: {e}")
@@ -470,6 +477,11 @@ def health_check():
 
 def main():
     try:
+        # Check Supabase connection first
+        if not supabase_client:
+            st.error("Failed to connect to Supabase. Please check your credentials.")
+            return
+            
         st.title("Funding Rate Analysis")
         
         if st.button("🔄 Refresh Data"):

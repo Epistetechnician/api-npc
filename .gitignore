@@ -6,3 +6,5 @@ __pycache__/
 venv/
 .streamlit/
 *.log
+.env.local
+.streamlit/secrets.toml
