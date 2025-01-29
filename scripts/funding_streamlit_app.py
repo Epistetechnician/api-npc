@@ -47,14 +47,22 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+# Initialize Supabase client globally
+SUPABASE_URL = "https://llanxjeohlxpnndhqbdp.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    logger.error(f"Failed to initialize Supabase client: {e}")
+    supabase = None
+
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
     try:
-        # Hardcode both Supabase credentials
-        supabase_url = "https://llanxjeohlxpnndhqbdp.supabase.co"
-        supabase_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
-        
-        supabase = create_client(supabase_url, supabase_key)
+        if not supabase:
+            logger.error("Supabase client not initialized")
+            return pd.DataFrame()
         
         # Get most recent predictions for each asset
         response = (supabase.table('predicted_funding_rates')
@@ -82,7 +90,7 @@ def get_predicted_rates():
         # Prepare result DataFrame with standardized columns
         result_df = pd.DataFrame({
             'symbol': latest_df['asset'].str.upper(),
-            'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce'),
+            'predicted_rate': pd.to_numeric(latest_df['predicted_rate'], errors='coerce') * 100,  # Convert to percentage
             'next_funding_time': latest_df['next_funding_time'],
             'exchange': latest_df['exchange'],
             'direction': latest_df['direction']
@@ -142,8 +150,12 @@ def analyze_funding_data():
         return pd.DataFrame()
 
 def check_supabase_connection():
-    """Check Supabase connection and data availability before fetching exchange data"""
+    """Check Supabase connection and data availability"""
     try:
+        if not supabase:
+            logger.error("Supabase client not initialized")
+            return False
+            
         # Test connection with a small query
         response = (supabase.table('predicted_funding_rates')
             .select('count', count='exact')
