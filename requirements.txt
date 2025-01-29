@@ -33,7 +33,7 @@ black==23.12.1
 mypy==1.7.1
 
 # Additional dependencies
-ccxt[async]>=4.1.13
+ccxt>=4.1.13
 gotrue>=1.3.0
 postgrest>=0.13.0
 
