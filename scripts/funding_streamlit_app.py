@@ -66,13 +66,18 @@ def load_environment():
     return True
 
 def get_predicted_rates():
-    """Fetch predicted rates from Supabase with proper column handling"""
+    """Fetch predicted rates from Supabase with proper error handling"""
     try:
         load_dotenv()
-        supabase = create_client(
-            os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
-        )
+        supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+        supabase_key = os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
+        
+        if not supabase_url or not supabase_key:
+            logger.error("Missing Supabase credentials")
+            st.error("Missing Supabase credentials. Please check your environment variables.")
+            return pd.DataFrame()
+            
+        supabase = create_client(supabase_url, supabase_key)
         
         # Early validation of Supabase connection
         if not supabase:
@@ -460,119 +465,146 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
         logger.error(f"Error pushing to Supabase: {e}")
         return False
 
+def health_check():
+    """Simple health check endpoint"""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
 def main():
-    if not load_environment():
-        st.stop()
-    st.set_page_config(page_title="Funding Rate Analysis", page_icon="📊", layout="wide")
-
-    # Add refresh button and status
-    col1, col2 = st.columns([1, 5])
-    with col1:
-        refresh = st.button("🔄 Refresh Data")
-    with col2:
-        if 'last_update' in st.session_state:
-            st.write(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
-
-    # Run analysis with progress and error handling
-    if 'df' not in st.session_state or refresh:
-        df = fetch_data()
-        if not df.empty:
-            st.session_state.df = df
-            st.session_state.last_update = datetime.now()
-            st.session_state.stats = calculate_stats(df)
+    try:
+        if not load_environment():
+            st.error("Failed to load environment variables")
+            st.stop()
             
-            # Create visualizations
-            viz_data = create_visualizations(df)
-            
-            # Push data to Supabase
-            with st.spinner("Pushing data to Supabase..."):
-                if push_to_supabase(df, st.session_state.stats, viz_data):
-                    st.success("Data successfully pushed to Supabase")
-                else:
-                    st.warning("Failed to push data to Supabase")
-            
-            st.session_state.viz_data = viz_data
-        else:
-            if st.button("Retry"):
-                st.rerun()
-            return
+        st.set_page_config(
+            page_title="Funding Rate Analysis",
+            page_icon="📊",
+            layout="wide",
+            initial_sidebar_state="expanded"
+        )
+        
+        # Add version info
+        st.sidebar.text(f"App Version: 1.0.0")
+        st.sidebar.text(f"Python: {sys.version.split()[0]}")
 
-    # Display data if available
-    if 'df' in st.session_state and not st.session_state.df.empty:
-        try:
-            # Display metrics
-            stats = st.session_state.stats
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric(
-                    "Total Markets",
-                    f"{stats['total_markets']}",
-                    f"{stats['binance_markets']} Binance / {stats['hl_markets']} HL"
-                )
-            with col2:
-                st.metric(
-                    "1H Rate",
-                    f"{stats['hourly_rate']:.4f}%",
-                    f"{stats['hourly_rate']*365*24:.1f}% APR"
-                )
-            with col3:
-                st.metric(
-                    "8H Rate",
-                    f"{stats['eight_hour_rate']:.4f}%",
-                    f"{stats['eight_hour_rate']*365/8:.1f}% APR"
-                )
-            with col4:
-                st.metric(
-                    "24H Rate",
-                    f"{stats['daily_rate']:.4f}%",
-                    f"{stats['daily_rate']*365/24:.1f}% APR"
-                )
+        # Add refresh button and status
+        col1, col2 = st.columns([1, 5])
+        with col1:
+            refresh = st.button("🔄 Refresh Data")
+        with col2:
+            if 'last_update' in st.session_state:
+                st.write(f"Last updated: {st.session_state.last_update.strftime('%H:%M:%S')}")
 
-            # Create tabs
-            tab1, tab2, tab3 = st.tabs([
-                "🎯 Top Opportunities",
-                "📊 Market Analysis",
-                "🔍 Detailed View"
-            ])
+        # Run analysis with progress and error handling
+        if 'df' not in st.session_state or refresh:
+            df = fetch_data()
+            if not df.empty:
+                st.session_state.df = df
+                st.session_state.last_update = datetime.now()
+                st.session_state.stats = calculate_stats(df)
+                
+                # Create visualizations
+                viz_data = create_visualizations(df)
+                
+                # Push data to Supabase
+                with st.spinner("Pushing data to Supabase..."):
+                    if push_to_supabase(df, st.session_state.stats, viz_data):
+                        st.success("Data successfully pushed to Supabase")
+                    else:
+                        st.warning("Failed to push data to Supabase")
+                
+                st.session_state.viz_data = viz_data
+            else:
+                if st.button("Retry"):
+                    st.rerun()
+                return
 
-            # Get visualization data
-            viz_data = create_visualizations(st.session_state.df)
-
-            # Display tabs content
-            with tab1:
-                if 'opportunity_scatter' in viz_data:
-                    st.plotly_chart(viz_data['opportunity_scatter'], use_container_width=True)
-                if 'top_opportunities' in viz_data:
-                    display_top_opportunities(viz_data['top_opportunities'])
-
-            with tab2:
-                col1, col2 = st.columns(2)
-                with col1:
-                    if 'funding_distribution' in viz_data:
-                        st.plotly_chart(viz_data['funding_distribution'], use_container_width=True)
-                with col2:
-                    if 'funding_heatmap' in viz_data:
-                        st.plotly_chart(viz_data['funding_heatmap'], use_container_width=True)
-
-            with tab3:
-                display_detailed_view(st.session_state.df)
-
-        except Exception as e:
-            st.error(f"Error displaying data: {str(e)}")
-            logger.error(f"Display error: {str(e)}", exc_info=True)
-            if st.button("Retry Display"):
-                st.rerun()
-    else:
-        st.info("Waiting for data... Click Refresh Data to start.")
-
-    # Simplified config generation
-    if st.button("Generate Hummingbot Config"):
+        # Display data if available
         if 'df' in st.session_state and not st.session_state.df.empty:
-            with st.spinner("Generating Hummingbot config..."):
-                generate_hummingbot_config(st.session_state.df)
+            try:
+                # Display metrics
+                stats = st.session_state.stats
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "Total Markets",
+                        f"{stats['total_markets']}",
+                        f"{stats['binance_markets']} Binance / {stats['hl_markets']} HL"
+                    )
+                with col2:
+                    st.metric(
+                        "1H Rate",
+                        f"{stats['hourly_rate']:.4f}%",
+                        f"{stats['hourly_rate']*365*24:.1f}% APR"
+                    )
+                with col3:
+                    st.metric(
+                        "8H Rate",
+                        f"{stats['eight_hour_rate']:.4f}%",
+                        f"{stats['eight_hour_rate']*365/8:.1f}% APR"
+                    )
+                with col4:
+                    st.metric(
+                        "24H Rate",
+                        f"{stats['daily_rate']:.4f}%",
+                        f"{stats['daily_rate']*365/24:.1f}% APR"
+                    )
+
+                # Create tabs
+                tab1, tab2, tab3 = st.tabs([
+                    "🎯 Top Opportunities",
+                    "📊 Market Analysis",
+                    "🔍 Detailed View"
+                ])
+
+                # Get visualization data
+                viz_data = create_visualizations(st.session_state.df)
+
+                # Display tabs content
+                with tab1:
+                    if 'opportunity_scatter' in viz_data:
+                        st.plotly_chart(viz_data['opportunity_scatter'], use_container_width=True)
+                    if 'top_opportunities' in viz_data:
+                        display_top_opportunities(viz_data['top_opportunities'])
+
+                with tab2:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if 'funding_distribution' in viz_data:
+                            st.plotly_chart(viz_data['funding_distribution'], use_container_width=True)
+                    with col2:
+                        if 'funding_heatmap' in viz_data:
+                            st.plotly_chart(viz_data['funding_heatmap'], use_container_width=True)
+
+                with tab3:
+                    display_detailed_view(st.session_state.df)
+
+            except Exception as e:
+                st.error(f"Error displaying data: {str(e)}")
+                logger.error(f"Display error: {str(e)}", exc_info=True)
+                if st.button("Retry Display"):
+                    st.rerun()
         else:
-            st.warning("Please fetch funding rates data first")
+            st.info("Waiting for data... Click Refresh Data to start.")
+
+        # Simplified config generation
+        if st.button("Generate Hummingbot Config"):
+            if 'df' in st.session_state and not st.session_state.df.empty:
+                with st.spinner("Generating Hummingbot config..."):
+                    generate_hummingbot_config(st.session_state.df)
+            else:
+                st.warning("Please fetch funding rates data first")
+
+        # Add health check endpoint
+        if 'health_check' in st.experimental_get_query_params():
+            st.json(health_check())
+            st.stop()
+
+    except Exception as e:
+        logger.error(f"Application error: {e}")
+        st.error(f"An error occurred: {str(e)}")
+        if st.button("Retry"):
+            st.experimental_rerun()
 
 def display_top_opportunities(top_opps):
     """Display top opportunities table with enhanced formatting"""

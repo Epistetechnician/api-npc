@@ -5,12 +5,12 @@ aiohttp==3.9.1
 websockets==12.0
 
 # Database
-supabase-py>=2.3.0
+supabase==2.3.0
 psycopg2-binary==2.9.9
 redis==5.0.1
 
 # Data processing
-pandas>=2.0.0
+pandas>=2.2.0
 numpy==1.26.2
 
 # API Clients
@@ -20,7 +20,7 @@ python-dateutil==2.8.2
 schedule==1.2.1
 
 # Monitoring & Logging
-rich>=13.0.0
+rich>=13.7.0
 python-json-logger==2.0.7
 
 # Development & Testing
@@ -34,13 +34,13 @@ gotrue>=1.3.0
 postgrest>=0.13.0
 
 # Streamlit
-streamlit
+streamlit>=1.31.0
 
 # Plotly
-plotly
+plotly>=5.18.0
 
 # HTTPX
 httpx
 
 # YAML
-pyyaml 
+pyyaml>=6.0.1 

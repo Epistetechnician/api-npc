@@ -1,1 +1,1 @@
-web: streamlit run scripts/funding_streamlit_app.py 
+web: streamlit run scripts/funding_streamlit_app.py --server.port $PORT 
