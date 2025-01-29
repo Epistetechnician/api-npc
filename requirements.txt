@@ -5,7 +5,8 @@ aiohttp==3.9.1
 websockets==12.0
 
 # Database
-supabase==2.3.0
+supabase>=2.3.0,<3.0.0
+httpx>=0.24.0,<0.25.0  # Pin httpx version to be compatible with supabase
 psycopg2-binary==2.9.9
 redis==5.0.1
 
@@ -41,9 +42,6 @@ streamlit>=1.31.0
 
 # Plotly
 plotly>=5.18.0
-
-# HTTPX
-httpx>=0.25.0
 
 # YAML
 pyyaml>=6.0.1 
