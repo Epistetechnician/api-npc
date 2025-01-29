@@ -56,28 +56,36 @@ def load_environment():
     
     required_vars = [
         "NEXT_PUBLIC_SUPABASE_URL",
-        "NEXT_PUBLIC_SUPABASE_KEY"
+        "NEXT_PUBLIC_SUPABASE_KEY",
+        "USE_BINANCE_GLOBAL"
     ]
     
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    env_vars = {}
+    missing_vars = []
+    
+    for var in required_vars:
+        value = os.getenv(var)
+        if not value:
+            missing_vars.append(var)
+        env_vars[var] = value
+    
     if missing_vars:
         st.error(f"Missing required environment variables: {', '.join(missing_vars)}")
-        return False
-    return True
+        return False, {}
+        
+    return True, env_vars
 
 def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper error handling"""
     try:
-        load_dotenv()
-        supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-        supabase_key = os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
-        
-        if not supabase_url or not supabase_key:
-            logger.error("Missing Supabase credentials")
-            st.error("Missing Supabase credentials. Please check your environment variables.")
+        success, env_vars = load_environment()
+        if not success:
             return pd.DataFrame()
             
-        supabase = create_client(supabase_url, supabase_key)
+        supabase = create_client(
+            env_vars["NEXT_PUBLIC_SUPABASE_URL"],
+            env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
+        )
         
         # Early validation of Supabase connection
         if not supabase:
@@ -472,11 +480,18 @@ def health_check():
 def main():
     try:
         # Check environment variables first
-        if not load_environment():
+        success, env_vars = load_environment()
+        if not success:
             st.error("Missing required environment variables. Please check your configuration.")
             st.stop()
             return
             
+        # Initialize Supabase client
+        supabase = create_client(
+            env_vars["NEXT_PUBLIC_SUPABASE_URL"],
+            env_vars["NEXT_PUBLIC_SUPABASE_KEY"]
+        )
+        
         st.set_page_config(
             page_title="Funding Rate Analysis",
             page_icon="📊",

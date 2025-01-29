@@ -31,9 +31,10 @@ class AdvancedFundingAnalyzer:
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'future',
-                'adjustForTimeDifference': True
+                'adjustForTimeDifference': True,
+                'defaultNetwork': 'BSC',
+                'recvWindow': 60000,
             },
-            # Add proxy support for region-restricted areas
             'proxies': {
                 'http': os.getenv('HTTP_PROXY', ''),
                 'https': os.getenv('HTTPS_PROXY', '')
@@ -41,10 +42,10 @@ class AdvancedFundingAnalyzer:
         })
         
         # Use API endpoints that work globally
-        if os.getenv('USE_BINANCE_GLOBAL', 'false').lower() == 'true':
+        if os.getenv('USE_BINANCE_GLOBAL', 'true').lower() == 'true':
             self.binance.urls['api'] = {
-                'public': 'https://api-pub.binance.com/api/v3',
-                'private': 'https://api.binance.com/api/v3',
+                'public': 'https://fapi.binance.com/fapi/v1',
+                'private': 'https://fapi.binance.com/fapi/v1',
             }
 
         # Use CCXT for Hyperliquid
@@ -68,10 +69,14 @@ class AdvancedFundingAnalyzer:
                 if "restricted location" in str(e).lower():
                     logger.warning("Using alternative Binance endpoint due to region restriction")
                     self.binance.urls['api'] = {
-                        'public': 'https://api.binance.com/api/v3',
-                        'private': 'https://api.binance.com/api/v3',
+                        'public': 'https://fapi.binance.com/fapi/v1',
+                        'private': 'https://fapi.binance.com/fapi/v1',
                     }
-                    self.binance.load_markets()
+                    try:
+                        self.binance.load_markets()
+                    except Exception as e:
+                        logger.error(f"Failed to load Binance markets: {e}")
+                        return []
             
             formatted_rates = []
             markets = [s for s in self.binance.symbols if s.endswith(':USDT')]
