@@ -57,15 +57,15 @@ def init_supabase():
             st.error("❌ Supabase configuration missing in Streamlit secrets")
             return None
 
-        url = st.secrets.supabase.get('url')
-        key = st.secrets.supabase.get('key')
+        supabase_url = st.secrets.supabase.get('supabase_url')
+        supabase_key = st.secrets.supabase.get('supabase_key')
         
-        if not url or not key:
+        if not supabase_url or not supabase_key:
             logger.error("Invalid Supabase credentials")
             st.error("🔑 Invalid Supabase credentials in secrets")
             return None
 
-        client = create_client(url, key)
+        client = create_client(supabase_url, supabase_key)
         
         # Validate connection
         try:
