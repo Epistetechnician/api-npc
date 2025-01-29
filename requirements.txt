@@ -5,8 +5,12 @@ aiohttp==3.9.1
 websockets==12.0
 
 # Database
-supabase-py>=2.3.0
+supabase>=2.3.0
 httpx>=0.24.0,<0.25.0
+gotrue>=1.3.0
+postgrest>=0.13.0
+storage3>=0.7.0
+supafunc>=0.3.0
 psycopg2-binary==2.9.9
 redis==5.0.1
 
@@ -34,8 +38,6 @@ mypy==1.7.1
 
 # Additional dependencies
 ccxt>=4.1.13
-gotrue>=1.3.0
-postgrest>=0.13.0
 
 # Streamlit
 streamlit>=1.31.0
