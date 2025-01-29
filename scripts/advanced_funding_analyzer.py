@@ -42,17 +42,20 @@ class AdvancedFundingAnalyzer:
             },
             'rateLimit': 100,
             'timeout': 30000,
-            # Use public API endpoints
             'urls': {
                 'api': {
-                    'public': 'https://www.binance.com/fapi/v1',
-                    'private': 'https://www.binance.com/fapi/v1',
+                    'public': 'https://fapi.binance.com/fapi/v1',
+                    'private': 'https://fapi.binance.com/fapi/v1',
                 }
             },
             'headers': {
-                'User-Agent': 'Mozilla/5.0',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
                 'Content-Type': 'application/json'
+            },
+            'proxies': {
+                'http': 'http://proxy.scrapingbee.com:8886',  # We'll use a proxy service
+                'https': 'http://proxy.scrapingbee.com:8886'
             }
         })
         
@@ -70,70 +73,80 @@ class AdvancedFundingAnalyzer:
         try:
             console.print("[cyan]Loading Binance markets...[/cyan]")
             
-            # Use direct API calls if CCXT fails
+            # Try direct API call first
             try:
-                self.binance.load_markets(reload=True)
-            except Exception as e:
-                logger.warning(f"CCXT market loading failed: {e}")
-                # Fallback to direct API calls
-                try:
-                    # Get funding rates directly
-                    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
-                    response = requests.get(url, timeout=10)
+                # Get funding rates directly using requests with proxy
+                proxy_url = "https://api.allorigins.win/raw?url="
+                target_url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+                
+                response = requests.get(
+                    proxy_url + target_url,
+                    timeout=15,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0',
+                        'Accept': 'application/json'
+                    }
+                )
+                
+                if response.status_code == 200:
                     data = response.json()
-                    
                     formatted_rates = []
+                    
                     for item in data:
                         try:
+                            if not isinstance(item, dict) or 'symbol' not in item:
+                                continue
+                                
+                            if not item['symbol'].endswith('USDT'):
+                                continue
+                                
                             symbol = item['symbol'].replace('USDT', '')
                             formatted_rates.append({
                                 'exchange': 'Binance',
                                 'symbol': symbol,
-                                'funding_rate': float(item['lastFundingRate']),
-                                'predicted_rate': 0.0,  # Not available in this endpoint
+                                'funding_rate': float(item.get('lastFundingRate', 0)),
+                                'predicted_rate': float(item.get('predictedFundingRate', 0)),
                                 'next_funding_time': datetime.fromtimestamp(
-                                    item['nextFundingTime'] / 1000
+                                    int(item.get('nextFundingTime', time.time() * 1000)) / 1000
                                 ),
-                                'mark_price': float(item['markPrice']),
+                                'mark_price': float(item.get('markPrice', 0)),
                                 'payment_interval': 8,
-                                'volume_24h': 0,  # Not available in this endpoint
+                                'volume_24h': 0,
                                 'timestamp': datetime.now()
                             })
                         except Exception as e:
-                            logger.warning(f"Error processing {symbol}: {e}")
+                            logger.warning(f"Error processing item {item}: {e}")
                             continue
                     
                     if formatted_rates:
-                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates using direct API[/green]")
+                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates using proxy[/green]")
+                        # Display sample rates
+                        for rate in formatted_rates[:3]:
+                            console.print(
+                                f"Symbol: {rate['symbol']}, "
+                                f"Rate: {rate['funding_rate']:.6f}, "
+                                f"Predicted: {rate['predicted_rate']:.6f}"
+                            )
                         return formatted_rates
                         
-                except Exception as e:
-                    logger.error(f"Direct API call failed: {e}")
-                    return []
-                
-            # Filter for USDT perpetual futures only
-            markets = [s for s in self.binance.symbols if ':USDT' in s]
-            formatted_rates = []
+                else:
+                    logger.warning(f"Direct API call failed with status code: {response.status_code}")
+                    
+            except Exception as e:
+                logger.warning(f"Direct API call failed: {e}")
             
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            ) as progress:
-                task = progress.add_task("[cyan]Fetching Binance rates...", total=len(markets))
+            # If direct API call fails, try CCXT with proxy
+            try:
+                self.binance.load_markets(reload=True)
+                markets = [s for s in self.binance.symbols if ':USDT' in s]
+                formatted_rates = []
                 
                 for symbol in markets:
                     try:
-                        # Fetch funding rate with proper error handling
                         funding_info = self.binance.fetch_funding_rate(symbol)
-                        mark_price = self.binance.fetch_ticker(symbol)
-                        
-                        # Extract base symbol
                         base = symbol.split(':')[0].replace('/USDT', '')
                         
-                        # Format the rate data
-                        rate_data = {
+                        formatted_rates.append({
                             'exchange': 'Binance',
                             'symbol': base,
                             'funding_rate': float(funding_info['fundingRate']),
@@ -141,41 +154,29 @@ class AdvancedFundingAnalyzer:
                             'next_funding_time': datetime.fromtimestamp(
                                 funding_info['fundingTimestamp'] / 1000
                             ),
-                            'mark_price': float(mark_price['last'] if mark_price else 0),
-                            'payment_interval': 8,  # Binance uses 8-hour intervals
-                            'volume_24h': float(mark_price.get('quoteVolume', 0)),
-                            'timestamp': datetime.fromtimestamp(
-                                funding_info['timestamp'] / 1000
-                            )
-                        }
+                            'mark_price': float(funding_info.get('markPrice', 0)),
+                            'payment_interval': 8,
+                            'volume_24h': 0,
+                            'timestamp': datetime.now()
+                        })
                         
-                        formatted_rates.append(rate_data)
-                        progress.update(task, advance=1)
-                        
-                        # Respect rate limits
-                        time.sleep(self.binance.rateLimit / 1000)
+                        time.sleep(0.1)  # Rate limiting
                         
                     except Exception as e:
-                        logger.warning(f"Error processing {symbol}: {str(e)}")
-                        progress.update(task, advance=1)
+                        logger.warning(f"Error processing {symbol}: {e}")
                         continue
+                
+                if formatted_rates:
+                    return formatted_rates
+                    
+            except Exception as e:
+                logger.error(f"CCXT approach failed: {e}")
             
-            if formatted_rates:
-                console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates[/green]")
-                # Display sample rates for verification
-                for rate in formatted_rates[:3]:
-                    console.print(
-                        f"Symbol: {rate['symbol']}, "
-                        f"Rate: {rate['funding_rate']:.6f}, "
-                        f"Predicted: {rate['predicted_rate']:.6f}"
-                    )
-            else:
-                console.print("[red]No Binance rates were fetched[/red]")
-            
-            return formatted_rates
+            logger.error("All attempts to fetch Binance rates failed")
+            return []
             
         except Exception as e:
-            logger.error(f"Error fetching Binance rates: {str(e)}")
+            logger.error(f"Error in get_binance_all_rates: {e}")
             return []
 
     def get_hyperliquid_all_rates(self) -> List[Dict]:
