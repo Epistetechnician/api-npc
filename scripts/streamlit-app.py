@@ -1036,4 +1036,4 @@ def display_detailed_view(df):
         st.error("Error displaying detailed view")
 
 if __name__ == "__main__":
-    main() 
+    main() .__annotations__
