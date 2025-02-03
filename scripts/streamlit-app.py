@@ -70,9 +70,11 @@ def get_predicted_rates():
     """Fetch predicted rates from Supabase with proper rate normalization"""
     try:
         load_dotenv()
+        # Initialize Supabase client without proxy settings
         supabase = create_client(
             os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
+            os.getenv("NEXT_PUBLIC_SUPABASE_KEY"),
+            options={'headers': {'Authorization': f'Bearer {os.getenv("NEXT_PUBLIC_SUPABASE_KEY")}'}}
         )
         
         # Get current UTC time
@@ -162,7 +164,8 @@ def check_supabase_connection():
         load_dotenv()
         supabase = create_client(
             os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
+            os.getenv("NEXT_PUBLIC_SUPABASE_KEY"),
+            options={'headers': {'Authorization': f'Bearer {os.getenv("NEXT_PUBLIC_SUPABASE_KEY")}'}}
         )
         
         # Test connection with a small query
@@ -547,46 +550,273 @@ def create_exchange_comparison(df):
         logger.error(f"Error creating exchange comparison: {e}")
         return None
 
-def generate_hummingbot_config(df):
-    """Generate Hummingbot configuration file"""
+def generate_trading_analysis(df: pd.DataFrame) -> dict:
+    """Generate comprehensive trading analysis and recommendations"""
     try:
-        # Filter and sort opportunities
-        top_opportunities = df.nlargest(10, 'opportunity_score')
-        
-        config = {
-            'template_version': 1,
-            'strategy': 'perpetual_market_making',
-            'exchange': 'hyperliquid_perpetual',
-            'markets': [],
-            'execution_timeframe': '8h',
-            'position_mode': 'ONEWAY'
+        # Validate DataFrame
+        if df is None or df.empty:
+            logger.error("Empty DataFrame provided to analysis")
+            return {}
+            
+        # Ensure required columns exist
+        required_columns = ['symbol', 'exchange', 'funding_rate', 'predicted_rate', 
+                          'opportunity_score', 'time_to_funding', 'annualized_rate']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            logger.error(f"Missing required columns: {missing_columns}")
+            return {}
+
+        # Initialize analysis dict
+        analysis = {
+            'top_opportunities': [],
+            'market_overview': {},
+            'exchange_insights': {},
+            'hummingbot_configs': {}
         }
         
-        for _, token_data in top_opportunities.iterrows():
-            market_config = {
-                'market': f"{token_data['symbol']}-USDT",
-                'leverage': 2,
-                'position_size_quote': 100,
-                'profitability_to_take_profit': max(0.01, abs(float(token_data['funding_rate'])) * 10),
-                'funding_rate_diff_stop_loss': -abs(float(token_data['funding_rate'])),
-                'trade_profitability_condition_to_enter': False
+        # Market Overview with error handling
+        try:
+            analysis['market_overview'] = {
+                'total_pairs': len(df),
+                'avg_funding_rate': float(df['funding_rate'].mean()),
+                'max_opportunity': float(df['opportunity_score'].max()),
+                'market_sentiment': 'Bullish' if df['funding_rate'].mean() > 0 else 'Bearish'
             }
-            config['markets'].append(market_config)
+        except Exception as e:
+            logger.error(f"Error calculating market overview: {e}")
+            analysis['market_overview'] = {
+                'total_pairs': 0,
+                'avg_funding_rate': 0.0,
+                'max_opportunity': 0.0,
+                'market_sentiment': 'Neutral'
+            }
         
-        # Save config to file
-        config_path = Path('generated_config.yml')
-        with open(config_path, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False)
+        # Exchange Insights with error handling
+        try:
+            for exchange in df['exchange'].unique():
+                ex_df = df[df['exchange'] == exchange].copy()
+                if not ex_df.empty:
+                    top_pairs = ex_df.nlargest(5, 'opportunity_score')
+                    analysis['exchange_insights'][exchange] = {
+                        'top_pairs': top_pairs[['symbol', 'funding_rate', 'predicted_rate', 'opportunity_score']].to_dict('records'),
+                        'avg_opportunity': float(ex_df['opportunity_score'].mean()),
+                        'total_pairs': len(ex_df)
+                    }
+        except Exception as e:
+            logger.error(f"Error processing exchange insights: {e}")
         
-        st.success(f"Config generated and saved to {config_path}")
+        # Generate Hummingbot Configs with error handling
+        try:
+            analysis['hummingbot_configs'] = generate_hummingbot_config(df)
+        except Exception as e:
+            logger.error(f"Error generating Hummingbot config: {e}")
+            analysis['hummingbot_configs'] = {'config_text': '', 'parameters': {}}
         
-        # Display config preview
-        with st.expander("Preview Config"):
-            st.code(yaml.dump(config, default_flow_style=False), language='yaml')
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error in generate_trading_analysis: {e}")
+        return {}
+
+def display_trading_analysis(df: pd.DataFrame):
+    """Display comprehensive trading analysis in Streamlit"""
+    try:
+        # Generate analysis with progress indicator
+        with st.spinner("Generating trading analysis..."):
+            analysis = generate_trading_analysis(df)
+            
+        if not analysis:
+            st.error("Unable to generate analysis. Please check the data.")
+            return
+            
+        # Create analysis tabs with unique keys
+        analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs([
+            "🎯 Trading Opportunities", 
+            "📊 Market Overview",
+            "🤖 Hummingbot Config"
+        ])
+        
+        with analysis_tab1:
+            st.subheader("Top Trading Opportunities")
+            
+            # Add filtering options with unique keys
+            min_score = st.slider(
+                "Minimum Opportunity Score", 
+                min_value=0, 
+                max_value=int(df['opportunity_score'].max() or 1000),
+                value=100,
+                key="opportunity_score_slider"  # Added unique key
+            )
+                                
+            selected_exchanges = st.multiselect(
+                "Select Exchanges",
+                options=df['exchange'].unique().tolist(),
+                default=df['exchange'].unique().tolist(),
+                key="exchange_selector"  # Added unique key
+            )
+            
+            # Filter with error handling
+            try:
+                filtered_df = df[
+                    (df['opportunity_score'] >= min_score) & 
+                    (df['exchange'].isin(selected_exchanges))
+                ].sort_values('opportunity_score', ascending=False)
+                
+                if filtered_df.empty:
+                    st.warning("No opportunities match the selected criteria.")
+                    return
+                    
+                for idx, row in filtered_df.head(10).iterrows():
+                    with st.expander(
+                        f"{row['symbol']} on {row['exchange']} - Score: {row['opportunity_score']:.2f}",
+                        key=f"opportunity_expander_{idx}"  # Added unique key
+                    ):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric(
+                                "Current Funding Rate", 
+                                f"{row['funding_rate']*100:.4f}%",
+                                key=f"funding_rate_metric_{idx}"  # Added unique key
+                            )
+                            st.metric(
+                                "Predicted Rate", 
+                                f"{row['predicted_rate']*100:.4f}%",
+                                key=f"predicted_rate_metric_{idx}"  # Added unique key
+                            )
+                        with col2:
+                            st.metric(
+                                "Time to Funding", 
+                                f"{row['time_to_funding']:.1f}h",
+                                key=f"time_to_funding_metric_{idx}"  # Added unique key
+                            )
+                            st.metric(
+                                "Annualized Rate", 
+                                f"{row['annualized_rate']:.2f}%",
+                                key=f"annualized_rate_metric_{idx}"  # Added unique key
+                            )
+                        
+                        # Trading suggestion with unique key
+                        if row['funding_rate'] > 0:
+                            st.success(
+                                "💡 Suggested Strategy: Short funding rate arbitrage",
+                                key=f"strategy_suggestion_{idx}"  # Added unique key
+                            )
+                        else:
+                            st.success(
+                                "💡 Suggested Strategy: Long funding rate arbitrage",
+                                key=f"strategy_suggestion_{idx}"  # Added unique key
+                            )
+            except Exception as e:
+                logger.error(f"Error displaying opportunities: {e}")
+                st.error("Error displaying opportunities. Please try again.")
+        
+        with analysis_tab2:
+            st.subheader("Market Overview")
+            
+            # Market metrics with unique keys
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(
+                    "Total Trading Pairs", 
+                    analysis['market_overview']['total_pairs'],
+                    key="total_pairs_metric"  # Added unique key
+                )
+            with col2:
+                st.metric(
+                    "Average Funding Rate", 
+                    f"{analysis['market_overview']['avg_funding_rate']*100:.4f}%",
+                    key="avg_funding_rate_metric"  # Added unique key
+                )
+            with col3:
+                st.metric(
+                    "Market Sentiment", 
+                    analysis['market_overview']['market_sentiment'],
+                    key="market_sentiment_metric"  # Added unique key
+                )
+            
+            # Exchange comparison with unique keys
+            st.subheader("Exchange Analysis")
+            for ex_idx, (exchange, insights) in enumerate(analysis['exchange_insights'].items()):
+                with st.expander(
+                    f"{exchange} Analysis",
+                    key=f"exchange_analysis_{ex_idx}"  # Added unique key
+                ):
+                    st.write(f"Total Pairs: {insights['total_pairs']}")
+                    st.write(f"Average Opportunity Score: {insights['avg_opportunity']:.2f}")
+                    st.write("Top Pairs:")
+                    st.dataframe(
+                        pd.DataFrame(insights['top_pairs']),
+                        key=f"exchange_dataframe_{ex_idx}"  # Added unique key
+                    )
+        
+        with analysis_tab3:
+            st.subheader("Hummingbot Configuration")
+            config = analysis['hummingbot_configs']
+            
+            # Display and allow download of config with unique keys
+            st.code(
+                config['config_text'], 
+                language='yaml',
+                key="hummingbot_config_code"  # Added unique key
+            )
+            st.download_button(
+                "Download Hummingbot Config",
+                config['config_text'],
+                file_name="hummingbot_funding_config.yml",
+                mime="text/yaml",
+                key="download_config_button"  # Added unique key
+            )
             
     except Exception as e:
-        logger.error(f"Error generating config: {e}")
-        st.error(f"Failed to generate config: {str(e)}")
+        logger.error(f"Error in display_trading_analysis: {e}")
+        st.error(f"Error generating analysis: {str(e)}")
+        st.error("Please check the logs for more details.")
+
+def generate_hummingbot_config(df: pd.DataFrame) -> dict:
+    """Generate optimized Hummingbot configuration"""
+    try:
+        # Get top opportunities
+        top_pairs = df.nlargest(5, 'opportunity_score')
+        
+        # Generate YAML config
+        config_text = f"""
+# Funding Rate Arbitrage Strategy Configuration
+template_version: 1
+strategy: funding_rate_arbitrage
+
+# Markets Configuration
+markets:
+  {top_pairs['exchange'].iloc[0]}:
+    # Top pairs based on opportunity score
+    pairs:
+{chr(10).join(f'      - {row.symbol}' for _, row in top_pairs.iterrows())}
+
+# Strategy Parameters
+funding_rate_threshold: {df['funding_rate'].std() * 2:.6f}
+min_opportunity_score: {df['opportunity_score'].quantile(0.75):.2f}
+position_size_usd: 1000
+leverage: 3
+max_positions: 5
+
+# Risk Management
+stop_loss_pct: 1.0
+take_profit_pct: 0.5
+max_position_age: 24h
+"""
+        
+        return {
+            'config_text': config_text,
+            'parameters': {
+                'funding_rate_threshold': f"{df['funding_rate'].std() * 2:.6f}",
+                'min_opportunity_score': f"{df['opportunity_score'].quantile(0.75):.2f}",
+                'suggested_leverage': 3,
+                'max_positions': 5
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating Hummingbot config: {e}")
+        return {'config_text': '', 'parameters': {}}
 
 def save_config_file(config: dict) -> str:
     """Save config to YAML file"""
@@ -816,7 +1046,7 @@ def main():
                             st.plotly_chart(viz_data['funding_heatmap'], use_container_width=True)
 
                 with tab3:
-                    display_detailed_view(st.session_state.df)
+                    display_trading_analysis(st.session_state.df)
 
             except Exception as e:
                 st.error(f"Error displaying data: {str(e)}")
@@ -826,6 +1056,12 @@ def main():
         else:
             st.info("Waiting for data... Click Refresh Data to start.")
             
+        # Add Analysis Section
+        st.sidebar.markdown("---")
+        if st.sidebar.checkbox("Show Advanced Analysis", False):
+            st.header("📈 Advanced Trading Analysis")
+            display_trading_analysis(st.session_state.df)
+        
     except Exception as e:
         logger.error(f"Main function error: {e}")
         st.error(f"An error occurred: {str(e)}")
@@ -944,7 +1180,6 @@ def display_cross_exchange_opportunities(df):
         if arb_opportunities:
             arb_df = pd.DataFrame(arb_opportunities)
             arb_df = arb_df.sort_values('annual_return', ascending=False).head(25)  # Show top 25
-            
             # Reorder columns for better display
             arb_df = arb_df[[
                 'symbol',
@@ -1026,9 +1261,7 @@ def display_detailed_view(df):
                     cmap='RdYlGn'
                 ).background_gradient(
                     subset=['rate_diff'],
-                    cmap='YlOrRd',
-                    vmin=0,
-                    vmax=0.0001  # Set a maximum value for the gradient 
+                    cmap='YlOrRd'
                 )
             )
     except Exception as e:
