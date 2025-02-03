@@ -13,6 +13,7 @@ import yaml
 from pathlib import Path
 import sys
 import logging.config
+import traceback
 
 # Configure logging
 logging.config.dictConfig({
@@ -52,20 +53,36 @@ if project_root not in sys.path:
 def init_supabase() -> Client:
     """Initialize Supabase client with error handling"""
     try:
-        # Direct initialization without create_client
-        return Client(
-            supabase_url="https://llanxjeohlxpnndhqbdp.supabase.co",
-            supabase_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+        url = "https://llanxjeohlxpnndhqbdp.supabase.co"
+        key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+        
+        # Create client with proper initialization
+        client = create_client(
+            supabase_url=url,
+            supabase_key=key,
+            options={
+                'headers': {
+                    'Authorization': f'Bearer {key}',
+                    'apikey': key
+                }
+            }
         )
+        return client
     except Exception as e:
         logger.error(f"Failed to initialize Supabase client: {e}")
         return None
 
 # Initialize the client at module level
 try:
-    supabase_client = Client(
+    supabase_client = create_client(
         supabase_url="https://llanxjeohlxpnndhqbdp.supabase.co",
-        supabase_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8"
+        supabase_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8",
+        options={
+            'headers': {
+                'Authorization': f'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8',
+                'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsYW54amVvaGx4cG5uZGhxYmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ2Mjg3ODAsImV4cCI6MjA1MDIwNDc4MH0.v3LyTKJAJ4ycRZBJ_rdCJSCvfEeqs-Ghk5gyDL-luI8'
+            }
+        }
     )
 except Exception as e:
     logger.error(f"Failed to initialize global Supabase client: {e}")
@@ -117,6 +134,7 @@ def get_predicted_rates():
             
     except Exception as e:
         logger.error(f"Error fetching predicted rates: {e}")
+        logger.error(f"Error details:\n{traceback.format_exc()}")
         return pd.DataFrame()
 
 def analyze_funding_data():
