@@ -164,8 +164,7 @@ def check_supabase_connection():
         load_dotenv()
         supabase = create_client(
             os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY"),
-            options={'headers': {'Authorization': f'Bearer {os.getenv("NEXT_PUBLIC_SUPABASE_KEY")}'}}
+            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
         )
         
         # Test connection with a small query
@@ -838,8 +837,17 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
         load_dotenv()
         supabase = create_client(
             os.getenv("NEXT_PUBLIC_SUPABASE_URL"),
-            os.getenv("NEXT_PUBLIC_SUPABASE_KEY")
+            os.getenv("NEXT_PUBLIC_SUPABASE_KEY"),
+            options={
+                'auth': {
+                    'autoRefreshToken': True,
+                    'persistSession': True
+                }
+            }
         )
+        
+        # Convert timestamps to ISO format strings
+        current_time = datetime.now().isoformat()
         
         # Push current market snapshot
         market_data = df.apply(lambda x: {
@@ -854,7 +862,7 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
             'opportunity_score': float(x['opportunity_score']),
             'mark_price': float(x['mark_price']),
             'suggested_position': "Long" if x['funding_rate'] < 0 else "Short",
-            'created_at': datetime.now().isoformat(),
+            'created_at': current_time,
         }, axis=1).tolist()
         
         # Push market snapshot
@@ -869,25 +877,11 @@ def push_to_supabase(df: pd.DataFrame, stats: dict, viz_data: dict):
             'hourly_rate': float(stats['hourly_rate']),
             'eight_hour_rate': float(stats['eight_hour_rate']),
             'daily_rate': float(stats['daily_rate']),
-            'created_at': datetime.now().isoformat()
+            'created_at': current_time
         }
         
         response = supabase.table('funding_statistics').insert(stats_data).execute()
         logger.info("Pushed statistics")
-        
-        # Push top opportunities
-        if 'top_opportunities' in viz_data:
-            top_opps = viz_data['top_opportunities'].apply(lambda x: {
-                'symbol': x['symbol'],
-                'exchange': x['exchange'],
-                'funding_rate': float(x['funding_rate']),
-                'predicted_rate': float(x['predicted_rate']),
-                'opportunity_score': float(x['opportunity_score']),
-                'created_at': datetime.now().isoformat()
-            }, axis=1).tolist()
-            
-            response = supabase.table('funding_top_opportunities').insert(top_opps).execute()
-            logger.info(f"Pushed {len(top_opps)} top opportunities")
         
         return True
         
