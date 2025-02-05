@@ -15,6 +15,8 @@ from hyperliquid.utils import constants
 import aiohttp
 import asyncio
 from rich.table import Table
+import plotly.express as px
+import plotly.graph_objects as go
 
 # Load environment variables
 load_dotenv()
@@ -261,117 +263,243 @@ class AdvancedFundingAnalyzer:
         
         return sorted(opportunities, key=lambda x: x['spread'], reverse=True)
 
-    def display_results(self, df: pd.DataFrame):
-        """Enhanced display with predicted rates and better arbitrage recommendations"""
-        console = Console()
-        
-        # Header with timestamp
-        console.print("\n" + "="*80)
-        console.print("🏦 Funding Rate Analysis Report", style="bold cyan")
-        console.print(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        console.print("="*80 + "\n")
-
-        # Market Summary
-        console.print("[yellow]📊 Market Summary[/yellow]")
-        summary_table = Table(show_header=True, header_style="bold magenta")
-        summary_table.add_column("Metric", style="cyan")
-        summary_table.add_column("Value", justify="right")
-        
-        summary_stats = {
-            "Total Markets": len(df),
-            "Average Funding Rate": f"{df['funding_rate'].mean():.6f}",
-            "Median Funding Rate": f"{df['funding_rate'].median():.6f}",
-            "Highest Rate": f"{df['funding_rate'].max():.6f}",
-            "Lowest Rate": f"{df['funding_rate'].min():.6f}"
-        }
-        
-        for metric, value in summary_stats.items():
-            summary_table.add_row(metric, str(value))
-        console.print(summary_table)
-        
-        # Existing comparison logic
-        comparison_df = self._prepare_comparison_data(df)
-        
-        if not comparison_df.empty:
-            console.print("\n[yellow]📊 Top Funding Rate Arbitrage Opportunities[/yellow]")
+    def create_visualizations(self, df: pd.DataFrame):
+        """Create visualization objects for the dashboard"""
+        try:
+            viz_data = {}
             
-            # Enhanced arbitrage table
-            arb_table = Table(
-                show_header=True,
-                header_style="bold magenta",
-                title="Top 10 Arbitrage Opportunities",
-                title_style="bold cyan"
+            # Current vs Predicted scatter plot
+            fig_opportunity = go.Figure()
+            
+            # Add scatter traces for each exchange
+            for exchange in df['exchange'].unique():
+                exchange_data = df[df['exchange'] == exchange]
+                fig_opportunity.add_trace(
+                    go.Scatter(
+                        x=exchange_data['funding_rate'],
+                        y=exchange_data['predicted_rate'],
+                        mode='markers',
+                        name=exchange,
+                        text=exchange_data['symbol'],
+                        hovertemplate=(
+                            "<b>%{text}</b><br>" +
+                            "Current Rate: %{x:.6f}<br>" +
+                            "Predicted Rate: %{y:.6f}<br>" +
+                            "Annual: %{customdata:.2f}%<br>" +
+                            "<extra></extra>"
+                        ),
+                        customdata=exchange_data['annualized_rate']
+                    )
+                )
+            
+            fig_opportunity.update_layout(
+                title='Current vs Predicted Funding Rates',
+                xaxis_title='Current Funding Rate',
+                yaxis_title='Predicted Funding Rate',
+                template='plotly_dark',
+                showlegend=True
             )
             
-            # Add columns with proper formatting
-            columns = [
-                ("Symbol", "cyan"),
-                ("Binance Rate", "green"),
-                ("Binance Pred.", "blue"),
-                ("Binance Ann.%", "yellow"),
-                ("HL Rate", "green"),
-                ("HL Pred.", "blue"),
-                ("HL Ann.%", "yellow"),
-                ("Spread", "red")
-            ]
+            viz_data['opportunity_scatter'] = fig_opportunity
             
-            for col_name, col_style in columns:
-                arb_table.add_column(col_name, style=col_style)
+            # Create funding rate distribution
+            fig_dist = go.Figure()
             
-            # Format and add rows
-            for _, row in comparison_df.head(10).iterrows():
-                arb_table.add_row(
-                    row['Symbol'],
-                    f"{row['Binance Rate']:.6f}",
-                    f"{row['Binance Pred.']:.6f}",
-                    f"{row['Binance Ann.%']:.2f}",
-                    f"{row['HL Rate']:.6f}",
-                    f"{row['HL Pred.']:.6f}",
-                    f"{row['HL Ann.%']:.2f}",
-                    f"{row['Spread']:.6f}"
+            for exchange in df['exchange'].unique():
+                exchange_data = df[df['exchange'] == exchange]
+                fig_dist.add_trace(
+                    go.Histogram(
+                        x=exchange_data['funding_rate'],
+                        name=exchange,
+                        opacity=0.7,
+                        nbinsx=30
+                    )
                 )
             
-            console.print(arb_table)
+            fig_dist.update_layout(
+                title='Funding Rate Distribution',
+                xaxis_title='Funding Rate',
+                yaxis_title='Count',
+                barmode='overlay',
+                template='plotly_dark'
+            )
             
-            # Get top 10 symbols by spread
-            top_symbols = comparison_df.head(10)['Symbol'].tolist()
+            viz_data['funding_distribution'] = fig_dist
             
-            # Fetch predicted rates for top symbols
-            predicted_rates = self.get_coinalyze_predicted_rates(top_symbols)
+            # Create exchange comparison box plot
+            fig_box = go.Figure()
             
-            # Enhanced arbitrage recommendations
-            console.print("\n💡 [yellow]Advanced Arbitrage Recommendations:[/yellow]")
-            opportunities = self.analyze_arbitrage_opportunities(comparison_df)
+            fig_box.add_trace(
+                go.Box(
+                    y=df[df['exchange'] == 'Binance']['funding_rate'],
+                    name='Binance',
+                    boxpoints='outliers'
+                )
+            )
             
-            for opp in opportunities[:5]:  # Top 5 opportunities
-                predicted_rate = predicted_rates.get(opp['symbol'], None)
+            fig_box.add_trace(
+                go.Box(
+                    y=df[df['exchange'] == 'Hyperliquid']['funding_rate'],
+                    name='Hyperliquid',
+                    boxpoints='outliers'
+                )
+            )
+            
+            fig_box.update_layout(
+                title='Funding Rate Comparison by Exchange',
+                yaxis_title='Funding Rate',
+                template='plotly_dark'
+            )
+            
+            viz_data['exchange_comparison'] = fig_box
+            
+            # Create funding rate heatmap for top pairs
+            top_pairs = df.nlargest(20, 'annualized_rate')
+            
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=[top_pairs['funding_rate'], top_pairs['predicted_rate']],
+                x=top_pairs['symbol'],
+                y=['Current Rate', 'Predicted Rate'],
+                colorscale='RdBu',
+                zmid=0
+            ))
+            
+            fig_heatmap.update_layout(
+                title='Top Pairs Funding Rate Heatmap',
+                xaxis_title='Symbol',
+                yaxis_title='Rate Type',
+                template='plotly_dark'
+            )
+            
+            viz_data['funding_heatmap'] = fig_heatmap
+            
+            return viz_data
+            
+        except Exception as e:
+            logger.error(f"Error creating visualizations: {e}")
+            return {}
+
+    def display_results(self, df: pd.DataFrame):
+        """Enhanced display with visualizations and better arbitrage recommendations"""
+        try:
+            console = Console()
+            
+            # Create visualizations
+            viz_data = self.create_visualizations(df)
+            
+            # Header with timestamp
+            console.print("\n" + "="*80)
+            console.print("🏦 Funding Rate Analysis Report", style="bold cyan")
+            console.print(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            console.print("="*80 + "\n")
+
+            # Market Summary
+            console.print("[yellow]📊 Market Summary[/yellow]")
+            summary_table = Table(show_header=True, header_style="bold magenta")
+            summary_table.add_column("Metric", style="cyan")
+            summary_table.add_column("Value", justify="right")
+            
+            summary_stats = {
+                "Total Markets": len(df),
+                "Average Funding Rate": f"{df['funding_rate'].mean():.6f}",
+                "Median Funding Rate": f"{df['funding_rate'].median():.6f}",
+                "Highest Rate": f"{df['funding_rate'].max():.6f}",
+                "Lowest Rate": f"{df['funding_rate'].min():.6f}"
+            }
+            
+            for metric, value in summary_stats.items():
+                summary_table.add_row(metric, str(value))
+            console.print(summary_table)
+            
+            # Existing comparison logic
+            comparison_df = self._prepare_comparison_data(df)
+            
+            if not comparison_df.empty:
+                console.print("\n[yellow]📊 Top Funding Rate Arbitrage Opportunities[/yellow]")
                 
-                console.print(
-                    f"\n[cyan]• {opp['symbol']}[/cyan]",
-                    style="bold"
-                )
-                console.print(
-                    f"  Strategy: {opp['direction']}\n"
-                    f"  Current Spread: {opp['spread']:.6f}\n"
-                    f"  Expected Annual Return: {opp['expected_annual']:.2f}%\n"
-                    f"  Binance Rate: {opp['binance_rate']:.6f} "
-                    f"(Predicted: {opp['binance_predicted']:.6f})\n"
-                    f"  Hyperliquid Rate: {opp['hl_rate']:.6f} "
-                    f"(Predicted: {opp['hl_predicted']:.6f})"
+                # Enhanced arbitrage table
+                arb_table = Table(
+                    show_header=True,
+                    header_style="bold magenta",
+                    title="Top 10 Arbitrage Opportunities",
+                    title_style="bold cyan"
                 )
                 
-                if predicted_rate:
-                    console.print(
-                        f"  Coinalyze Predicted Rate: {predicted_rate:.6f}",
-                        style="bright_cyan"
+                # Add columns with proper formatting
+                columns = [
+                    ("Symbol", "cyan"),
+                    ("Binance Rate", "green"),
+                    ("Binance Pred.", "blue"),
+                    ("Binance Ann.%", "yellow"),
+                    ("HL Rate", "green"),
+                    ("HL Pred.", "blue"),
+                    ("HL Ann.%", "yellow"),
+                    ("Spread", "red")
+                ]
+                
+                for col_name, col_style in columns:
+                    arb_table.add_column(col_name, style=col_style)
+                
+                # Format and add rows
+                for _, row in comparison_df.head(10).iterrows():
+                    arb_table.add_row(
+                        row['Symbol'],
+                        f"{row['Binance Rate']:.6f}",
+                        f"{row['Binance Pred.']:.6f}",
+                        f"{row['Binance Ann.%']:.2f}",
+                        f"{row['HL Rate']:.6f}",
+                        f"{row['HL Pred.']:.6f}",
+                        f"{row['HL Ann.%']:.2f}",
+                        f"{row['Spread']:.6f}"
                     )
                 
-                # Add recommendation confidence
-                spread_threshold = 0.0005  # 5 basis points
-                if opp['spread'] > spread_threshold:
-                    console.print("  Confidence: [green]High[/green] - Significant spread")
-                else:
-                    console.print("  Confidence: [yellow]Medium[/yellow] - Monitor spread")
+                console.print(arb_table)
+                
+                # Get top 10 symbols by spread
+                top_symbols = comparison_df.head(10)['Symbol'].tolist()
+                
+                # Fetch predicted rates for top symbols
+                predicted_rates = self.get_coinalyze_predicted_rates(top_symbols)
+                
+                # Enhanced arbitrage recommendations
+                console.print("\n💡 [yellow]Advanced Arbitrage Recommendations:[/yellow]")
+                opportunities = self.analyze_arbitrage_opportunities(comparison_df)
+                
+                for opp in opportunities[:5]:  # Top 5 opportunities
+                    predicted_rate = predicted_rates.get(opp['symbol'], None)
+                    
+                    console.print(
+                        f"\n[cyan]• {opp['symbol']}[/cyan]",
+                        style="bold"
+                    )
+                    console.print(
+                        f"  Strategy: {opp['direction']}\n"
+                        f"  Current Spread: {opp['spread']:.6f}\n"
+                        f"  Expected Annual Return: {opp['expected_annual']:.2f}%\n"
+                        f"  Binance Rate: {opp['binance_rate']:.6f} "
+                        f"(Predicted: {opp['binance_predicted']:.6f})\n"
+                        f"  Hyperliquid Rate: {opp['hl_rate']:.6f} "
+                        f"(Predicted: {opp['hl_predicted']:.6f})"
+                    )
+                    
+                    if predicted_rate:
+                        console.print(
+                            f"  Coinalyze Predicted Rate: {predicted_rate:.6f}",
+                            style="bright_cyan"
+                        )
+                    
+                    # Add recommendation confidence
+                    spread_threshold = 0.0005  # 5 basis points
+                    if opp['spread'] > spread_threshold:
+                        console.print("  Confidence: [green]High[/green] - Significant spread")
+                    else:
+                        console.print("  Confidence: [yellow]Medium[/yellow] - Monitor spread")
+
+            return viz_data
+            
+        except Exception as e:
+            logger.error(f"Error in display results: {e}")
+            return {}
 
     def _prepare_comparison_data(self, df: pd.DataFrame):
         """Helper method to prepare comparison data"""
@@ -418,7 +546,7 @@ def main():
         df = analyzer.analyze_funding_opportunities()
         
         if not df.empty:
-            analyzer.display_results(df)
+            viz_data = analyzer.display_results(df)
             
             # Save results
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
