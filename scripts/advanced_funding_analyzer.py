@@ -52,101 +52,124 @@ class AdvancedFundingAnalyzer:
         })
         
         # Initialize Hyperliquid client
-        self.hyperliquid = Info(
-            base_url=constants.TESTNET_API_URL if os.getenv('USE_TESTNET') else constants.MAINNET_API_URL
-        )
+        self.hyperliquid = ccxt.hyperliquid({
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap',  # for perpetual futures
+                'adjustForTimeDifference': True
+            }
+        })
 
-    async def get_hyperliquid_all_rates(self) -> List[Dict]:
-        """Fetch all funding rates from Hyperliquid with improved error handling"""
+    def get_hyperliquid_all_rates(self) -> List[Dict]:
+        """Fetch funding rates from Hyperliquid using CCXT"""
         try:
+            console.print("[cyan]Loading Hyperliquid markets...[/cyan]")
+            
+            # Use CCXT's fetchFundingRates method
+            funding_rates = self.hyperliquid.fetch_funding_rates()
+            
             formatted_rates = []
-            async with aiohttp.ClientSession() as session:
-                # Fetch market info
-                response = await self.hyperliquid.get_all_mids()
-                markets = response.get('allMids', [])
-
-                # Debug output
-                logger.info(f"Fetched {len(markets)} markets from Hyperliquid")
-
-                for market in markets:
-                    try:
-                        symbol = market.get('name', '').upper()
-                        if not symbol:
-                            continue
-
-                        # Get funding rate info
-                        funding_info = await self.hyperliquid.get_funding_info(symbol)
-                        
-                        # Calculate predicted rate using improved logic
-                        current_rate = float(funding_info.get('currentFunding', 0))
-                        predicted_rate = float(funding_info.get('predFunding', current_rate))
-                        
-                        # Get mark price and volume
-                        mark_price = float(market.get('markPrice', 0))
-                        volume_24h = float(market.get('volume24h', 0))
-                        
-                        formatted_rates.append({
-                            'symbol': f"{symbol}PERP",
-                            'funding_rate': current_rate,
-                            'predicted_rate': predicted_rate,
-                            'next_funding_time': datetime.now() + timedelta(hours=1),
-                            'mark_price': mark_price,
-                            'payment_interval': 1,  # Hyperliquid uses 1-hour intervals
-                            'volume_24h': volume_24h,
-                            'timestamp': datetime.now().isoformat(),
-                            'exchange': 'Hyperliquid'
-                        })
-
-                    except Exception as market_error:
-                        logger.warning(f"Error processing market {symbol}: {market_error}")
-                        continue
-
-                logger.info(f"Successfully processed {len(formatted_rates)} Hyperliquid rates")
-                return formatted_rates
+            for symbol, data in funding_rates.items():
+                try:
+                    # Extract base symbol (remove USDT)
+                    base = symbol.split('/')[0]
+                    
+                    # Convert rates to percentages
+                    funding_rate = float(data['fundingRate']) * 100
+                    predicted_rate = float(data.get('predictedRate', funding_rate)) * 100
+                    
+                    formatted_rates.append({
+                        'exchange': 'Hyperliquid',
+                        'symbol': base,
+                        'funding_rate': funding_rate,
+                        'predicted_rate': predicted_rate,
+                        'next_funding_time': datetime.fromtimestamp(data['fundingTimestamp'] / 1000) if data.get('fundingTimestamp') else datetime.now() + timedelta(hours=1),
+                        'mark_price': float(data.get('markPrice', 0)),
+                        'payment_interval': 1,  # Hyperliquid uses 1-hour intervals
+                        'volume_24h': float(data.get('volume24h', 0)),
+                        'timestamp': datetime.now()
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing Hyperliquid rate for {symbol}: {e}")
+                    continue
+            
+            if formatted_rates:
+                console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Hyperliquid rates[/green]")
+            return formatted_rates
 
         except Exception as e:
             logger.error(f"Error fetching Hyperliquid rates: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
     def get_binance_all_rates(self) -> List[Dict]:
-        """Fetch all funding rates from Binance with improved error handling"""
+        """Fetch funding rates from Binance with improved error handling"""
         try:
-            console.print("Loading Binance markets...")
-            markets = self.binance.load_markets()
+            console.print("[cyan]Loading Binance markets...[/cyan]")
             
-            funding_rates = []
-            for symbol in markets:
-                if not symbol.endswith('USDT:USDT'):
-                    continue
-                    
+            # Try using public API endpoints first
+            endpoints = [
+                "https://fapi.binance.com/fapi/v1/premiumIndex",
+                "https://api.binance.com/fapi/v1/premiumIndex"
+            ]
+            
+            for endpoint in endpoints:
                 try:
-                    ticker = self.binance.fetch_ticker(symbol)
-                    funding = self.binance.fetch_funding_rate(symbol)
+                    response = requests.get(
+                        endpoint,
+                        timeout=15,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0',
+                            'Accept': 'application/json'
+                        }
+                    )
                     
-                    clean_symbol = symbol.replace(':USDT', '')
-                    funding_rates.append({
-                        'symbol': clean_symbol,
-                        'funding_rate': float(funding['fundingRate']),
-                        'predicted_rate': float(funding.get('predictedFundingRate', funding['fundingRate'])),
-                        'next_funding_time': funding['nextFundingTime'],
-                        'mark_price': float(ticker['last']),
-                        'payment_interval': 8,  # Binance uses 8-hour intervals
-                        'volume_24h': float(ticker['quoteVolume']),
-                        'timestamp': datetime.now().isoformat(),
-                        'exchange': 'Binance'
-                    })
-                    
-                except Exception as market_error:
-                    logger.warning(f"Error processing Binance market {symbol}: {market_error}")
+                    if response.status_code == 200:
+                        data = response.json()
+                        formatted_rates = []
+                        
+                        for item in data:
+                            try:
+                                if not isinstance(item, dict) or 'symbol' not in item:
+                                    continue
+                                    
+                                if not item['symbol'].endswith('USDT'):
+                                    continue
+                                    
+                                symbol = item['symbol'].replace('USDT', '')
+                                funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
+                                predicted_rate = float(item.get('predictedFundingRate', funding_rate)) * 100  # Convert to percentage
+                                
+                                formatted_rates.append({
+                                    'exchange': 'Binance',
+                                    'symbol': symbol,
+                                    'funding_rate': funding_rate,
+                                    'predicted_rate': predicted_rate,
+                                    'next_funding_time': datetime.fromtimestamp(
+                                        int(item.get('nextFundingTime', time.time() * 1000)) / 1000
+                                    ),
+                                    'mark_price': float(item.get('markPrice', 0)),
+                                    'payment_interval': 8,  # Binance uses 8-hour intervals
+                                    'volume_24h': 0,  # Not available in this endpoint
+                                    'timestamp': datetime.now()
+                                })
+                            except Exception as e:
+                                logger.warning(f"Error processing Binance item: {e}")
+                                continue
+                        
+                        if formatted_rates:
+                            console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates[/green]")
+                            return formatted_rates
+                            
+                except Exception as e:
+                    logger.warning(f"Endpoint {endpoint} failed: {e}")
                     continue
-
-            console.print(f"\n✓ Successfully fetched {len(funding_rates)} Binance rates")
-            return funding_rates
+            
+            logger.error("All Binance endpoints failed")
+            return []
             
         except Exception as e:
             logger.error(f"Error fetching Binance rates: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
     def analyze_funding_opportunities(self) -> pd.DataFrame:
