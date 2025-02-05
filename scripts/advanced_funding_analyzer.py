@@ -16,6 +16,8 @@ import aiohttp
 import asyncio
 from rich.table import Table
 import requests
+import traceback
+import math
 
 # Load environment variables
 load_dotenv()
@@ -49,316 +51,174 @@ class AdvancedFundingAnalyzer:
             }
         })
         
-        # Use CCXT for Hyperliquid
-        self.hyperliquid = ccxt.hyperliquid({
-            'enableRateLimit': True,
-            'options': {
-                'defaultType': 'swap',  # for perpetual futures
-                'adjustForTimeDifference': True
-            }
-        })
+        # Initialize Hyperliquid client
+        self.hyperliquid = Info(
+            base_url=constants.TESTNET_API_URL if os.getenv('USE_TESTNET') else constants.MAINNET_API_URL
+        )
 
-    def get_binance_all_rates(self) -> List[Dict]:
-        """Fetch both current and predicted funding rates from Binance"""
-        try:
-            console.print("[cyan]Loading Binance markets...[/cyan]")
-            
-            # Try using public API endpoints
-            endpoints = [
-                "https://api.allorigins.win/raw?url=https://fapi.binance.com/fapi/v1/premiumIndex",
-                "https://api.codetabs.com/v1/proxy?quest=https://fapi.binance.com/fapi/v1/premiumIndex",
-                "https://cors-anywhere.herokuapp.com/https://fapi.binance.com/fapi/v1/premiumIndex"
-            ]
-            
-            for proxy_url in endpoints:
-                try:
-                    response = requests.get(
-                        proxy_url,
-                        timeout=15,
-                        headers={
-                            'User-Agent': 'Mozilla/5.0',
-                            'Accept': 'application/json'
-                        }
-                    )
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        formatted_rates = []
-                        
-                        for item in data:
-                            try:
-                                if not isinstance(item, dict) or 'symbol' not in item:
-                                    continue
-                                    
-                                if not item['symbol'].endswith('USDT'):
-                                    continue
-                                    
-                                symbol = item['symbol'].replace('USDT', '')
-                                funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
-                                predicted_rate = float(item.get('predictedFundingRate', 0)) * 100  # Convert to percentage
-                                
-                                # Calculate annualized rates (8-hour intervals)
-                                annualized_rate = funding_rate * (365 * 3)  # 3 funding periods per day
-                                
-                                formatted_rates.append({
-                                    'exchange': 'Binance',
-                                    'symbol': symbol,
-                                    'funding_rate': funding_rate,
-                                    'predicted_rate': predicted_rate,
-                                    'next_funding_time': datetime.fromtimestamp(
-                                        int(item.get('nextFundingTime', time.time() * 1000)) / 1000
-                                    ),
-                                    'mark_price': float(item.get('markPrice', 0)),
-                                    'payment_interval': 8,
-                                    'volume_24h': 0,
-                                    'timestamp': datetime.now(),
-                                    'annualized_rate': annualized_rate,
-                                    'rate_diff': abs(predicted_rate - funding_rate)
-                                })
-                            except Exception as e:
-                                logger.warning(f"Error processing item {item}: {e}")
-                                continue
-                        
-                        if formatted_rates:
-                            console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates[/green]")
-                            return formatted_rates
-                            
-                except Exception as e:
-                    logger.warning(f"Proxy endpoint {proxy_url} failed: {e}")
-                    continue
-            
-            # If all proxies fail, try direct API call with VPN headers
-            try:
-                response = requests.get(
-                    "https://fapi.binance.com/fapi/v1/premiumIndex",
-                    timeout=15,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept': 'application/json',
-                        'X-Forwarded-For': '8.8.8.8',  # Google DNS IP
-                        'Origin': 'https://www.binance.com'
-                    }
-                )
-                
-                if response.status_code == 200:
-                    # Process response same as above...
-                    data = response.json()
-                    formatted_rates = []
-                    
-                    for item in data:
-                        try:
-                            if not isinstance(item, dict) or 'symbol' not in item:
-                                continue
-                                
-                            if not item['symbol'].endswith('USDT'):
-                                continue
-                                
-                            symbol = item['symbol'].replace('USDT', '')
-                            funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
-                            predicted_rate = float(item.get('predictedFundingRate', 0)) * 100  # Convert to percentage
-                            
-                            # Calculate annualized rates (8-hour intervals)
-                            annualized_rate = funding_rate * (365 * 3)  # 3 funding periods per day
-                            
-                            formatted_rates.append({
-                                'exchange': 'Binance',
-                                'symbol': symbol,
-                                'funding_rate': funding_rate,
-                                'predicted_rate': predicted_rate,
-                                'next_funding_time': datetime.fromtimestamp(
-                                    int(item.get('nextFundingTime', time.time() * 1000)) / 1000
-                                ),
-                                'mark_price': float(item.get('markPrice', 0)),
-                                'payment_interval': 8,
-                                'volume_24h': 0,
-                                'timestamp': datetime.now(),
-                                'annualized_rate': annualized_rate,
-                                'rate_diff': abs(predicted_rate - funding_rate)
-                            })
-                        except Exception as e:
-                            logger.warning(f"Error processing item {item}: {e}")
-                            continue
-                    
-                    if formatted_rates:
-                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates directly[/green]")
-                        return formatted_rates
-                        
-            except Exception as e:
-                logger.error(f"Direct API call failed: {e}")
-            
-            logger.error("All attempts to fetch Binance rates failed")
-            return []
-            
-        except Exception as e:
-            logger.error(f"Error in get_binance_all_rates: {e}")
-            return []
-
-    def get_hyperliquid_all_rates(self) -> List[Dict]:
-        """Fetch funding rates from Hyperliquid using CCXT"""
+    async def get_hyperliquid_all_rates(self) -> List[Dict]:
+        """Fetch all funding rates from Hyperliquid with improved error handling"""
         try:
             formatted_rates = []
-            
-            try:
-                markets = self.hyperliquid.load_markets()
-                funding_rates = self.hyperliquid.fetch_funding_rates()
-                
-                for symbol, data in funding_rates.items():
+            async with aiohttp.ClientSession() as session:
+                # Fetch market info
+                response = await self.hyperliquid.get_all_mids()
+                markets = response.get('allMids', [])
+
+                # Debug output
+                logger.info(f"Fetched {len(markets)} markets from Hyperliquid")
+
+                for market in markets:
                     try:
-                        base = symbol.split('/')[0]
-                        funding_rate = float(data['fundingRate']) * 100  # Convert to percentage
-                        predicted_rate = float(data.get('predictedRate', 0)) * 100  # Convert to percentage
+                        symbol = market.get('name', '').upper()
+                        if not symbol:
+                            continue
+
+                        # Get funding rate info
+                        funding_info = await self.hyperliquid.get_funding_info(symbol)
                         
-                        # Calculate annualized rates (1-hour intervals)
-                        annualized_rate = funding_rate * (365 * 24)  # 24 funding periods per day
+                        # Calculate predicted rate using improved logic
+                        current_rate = float(funding_info.get('currentFunding', 0))
+                        predicted_rate = float(funding_info.get('predFunding', current_rate))
+                        
+                        # Get mark price and volume
+                        mark_price = float(market.get('markPrice', 0))
+                        volume_24h = float(market.get('volume24h', 0))
                         
                         formatted_rates.append({
-                            'exchange': 'Hyperliquid',
-                            'symbol': base,
-                            'funding_rate': funding_rate,
+                            'symbol': f"{symbol}PERP",
+                            'funding_rate': current_rate,
                             'predicted_rate': predicted_rate,
-                            'next_funding_time': datetime.fromtimestamp(data.get('fundingTimestamp', time.time()) / 1000),
-                            'mark_price': float(data.get('markPrice', 0)),
-                            'payment_interval': 1,
-                            'annualized_rate': annualized_rate,
-                            'rate_diff': abs(predicted_rate - funding_rate)
+                            'next_funding_time': datetime.now() + timedelta(hours=1),
+                            'mark_price': mark_price,
+                            'payment_interval': 1,  # Hyperliquid uses 1-hour intervals
+                            'volume_24h': volume_24h,
+                            'timestamp': datetime.now().isoformat(),
+                            'exchange': 'Hyperliquid'
                         })
-                    except Exception as e:
-                        logger.warning(f"Error processing Hyperliquid rate for {symbol}: {e}")
+
+                    except Exception as market_error:
+                        logger.warning(f"Error processing market {symbol}: {market_error}")
                         continue
-                
+
+                logger.info(f"Successfully processed {len(formatted_rates)} Hyperliquid rates")
                 return formatted_rates
 
-            except Exception as e:
-                logger.error(f"Error fetching Hyperliquid rates: {str(e)}")
-                return []
-
         except Exception as e:
-            logger.error(f"Error in Hyperliquid rate fetch: {str(e)}")
+            logger.error(f"Error fetching Hyperliquid rates: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
-    async def _fetch_single_coinalyze_rate(self, session, symbol: str) -> Optional[float]:
-        """Fetch predicted rate for a single symbol"""
+    def get_binance_all_rates(self) -> List[Dict]:
+        """Fetch all funding rates from Binance with improved error handling"""
         try:
-            # Format symbol correctly for Coinalyze API
-            formatted_symbol = f"{symbol}USDT_PERP.A"  # Adding _PERP.A suffix as required
-            url = f"https://api.coinalyze.net/v1/predicted-funding-rate"
-            params = {'symbols': formatted_symbol}
+            console.print("Loading Binance markets...")
+            markets = self.binance.load_markets()
             
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # Extract rate from response
-                    if data and len(data) > 0:
-                        return float(data[0].get('predictedRate', 0))
-                else:
-                    logger.warning(f"Could not fetch Coinalyze rate for {symbol}: Status {response.status}")
-                    return None
-        except Exception as e:
-            logger.error(f"Error fetching Coinalyze rate for {symbol}: {e}")
-            return None
-
-    async def _fetch_coinalyze_rates_async(self, symbols: List[str]) -> Dict[str, float]:
-        """Fetch all predicted rates asynchronously"""
-        api_key = os.getenv('COINANALYZE_API_KEY')
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Accept': 'application/json'
-        }
-        
-        # Process symbols in batches of 20 as per API limit
-        batch_size = 20
-        predicted_rates = {}
-        
-        async with aiohttp.ClientSession(headers=headers) as session:
-            for i in range(0, len(symbols), batch_size):
-                batch_symbols = symbols[i:i + batch_size]
-                # Format symbols for batch request
-                formatted_symbols = [f"{s}USDT_PERP.A" for s in batch_symbols]
-                
-                url = "https://api.coinalyze.net/v1/predicted-funding-rate"
-                params = {'symbols': ','.join(formatted_symbols)}
-                
+            funding_rates = []
+            for symbol in markets:
+                if not symbol.endswith('USDT:USDT'):
+                    continue
+                    
                 try:
-                    async with session.get(url, params=params) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            # Process batch response
-                            for item in data:
-                                symbol = item['symbol'].replace('USDT_PERP.A', '')
-                                predicted_rates[symbol] = float(item.get('predictedRate', 0))
-                        else:
-                            logger.warning(f"Batch request failed: Status {response.status}")
-                except Exception as e:
-                    logger.error(f"Error in batch request: {e}")
-                
-                # Respect rate limits
-                await asyncio.sleep(0.5)  # 500ms delay between batches
-        
-        return predicted_rates
+                    ticker = self.binance.fetch_ticker(symbol)
+                    funding = self.binance.fetch_funding_rate(symbol)
+                    
+                    clean_symbol = symbol.replace(':USDT', '')
+                    funding_rates.append({
+                        'symbol': clean_symbol,
+                        'funding_rate': float(funding['fundingRate']),
+                        'predicted_rate': float(funding.get('predictedFundingRate', funding['fundingRate'])),
+                        'next_funding_time': funding['nextFundingTime'],
+                        'mark_price': float(ticker['last']),
+                        'payment_interval': 8,  # Binance uses 8-hour intervals
+                        'volume_24h': float(ticker['quoteVolume']),
+                        'timestamp': datetime.now().isoformat(),
+                        'exchange': 'Binance'
+                    })
+                    
+                except Exception as market_error:
+                    logger.warning(f"Error processing Binance market {symbol}: {market_error}")
+                    continue
 
-    def get_coinalyze_predicted_rates(self, symbols: List[str]) -> Dict[str, float]:
-        """Synchronous wrapper for async predicted rates fetch"""
-        try:
-            return asyncio.run(self._fetch_coinalyze_rates_async(symbols))
+            console.print(f"\n✓ Successfully fetched {len(funding_rates)} Binance rates")
+            return funding_rates
+            
         except Exception as e:
-            logger.error(f"Error in Coinalyze API call: {e}")
-            return {}
+            logger.error(f"Error fetching Binance rates: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
 
     def analyze_funding_opportunities(self) -> pd.DataFrame:
-        """Analyze funding rates and calculate opportunities"""
+        """Analyze funding opportunities across exchanges with improved processing"""
         try:
-            # Fetch rates from both exchanges
+            # Get Hyperliquid rates first
+            console.print("\n[cyan]Fetching Hyperliquid rates first...[/cyan]")
+            hl_rates = asyncio.run(self.get_hyperliquid_all_rates())
+            
+            if not hl_rates:
+                console.print("[red]❌ No Hyperliquid rates available[/red]")
+            else:
+                console.print(f"\n[green]✓ Successfully fetched {len(hl_rates)} Hyperliquid rates[/green]")
+            
+            # Get Binance rates
             binance_rates = self.get_binance_all_rates()
-            hyperliquid_rates = self.get_hyperliquid_all_rates()
             
-            # Combine rates
-            all_rates = binance_rates + hyperliquid_rates
-            
+            # Combine and process rates
+            all_rates = hl_rates + binance_rates
             if not all_rates:
+                console.print("[red]❌ No funding rates data available[/red]")
                 return pd.DataFrame()
-            
-            # Create DataFrame
+
             df = pd.DataFrame(all_rates)
             
-            # Calculate time to funding
-            df['time_to_funding'] = (df['next_funding_time'] - datetime.now()).dt.total_seconds() / 3600
+            # Calculate annualized rates and other metrics
+            df['annualized_rate'] = df.apply(
+                lambda x: float(x['funding_rate']) * (365 * 24 / x['payment_interval']) * 100,
+                axis=1
+            )
             
-            # Calculate opportunity score
-            df['opportunity_score'] = df.apply(lambda x: self._calculate_opportunity_score(
-                funding_rate=x['funding_rate'],
-                predicted_rate=x['predicted_rate'],
-                time_to_funding=x['time_to_funding'],
-                payment_interval=x['payment_interval']
-            ), axis=1)
+            # Calculate rate differences and opportunity scores
+            df['rate_diff'] = abs(df['predicted_rate'] - df['funding_rate'])
+            df['opportunity_score'] = df.apply(self.calculate_opportunity_score, axis=1)
             
             # Add trading direction
-            df['direction'] = df['funding_rate'].apply(lambda x: 'Long' if x < 0 else 'Short')
-            
-            return df
-            
+            df['direction'] = df.apply(
+                lambda x: 'long' if x['funding_rate'] < 0 else 'short',
+                axis=1
+            )
+
+            return df.sort_values('opportunity_score', ascending=False)
+
         except Exception as e:
-            logger.error(f"Error in analyze_funding_opportunities: {e}")
+            logger.error(f"Error analyzing funding opportunities: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return pd.DataFrame()
 
-    def _calculate_opportunity_score(self, funding_rate: float, predicted_rate: float, 
-                                   time_to_funding: float, payment_interval: int) -> float:
-        """Calculate opportunity score with proper rate handling"""
+    def calculate_opportunity_score(self, row: pd.Series) -> float:
+        """Calculate opportunity score with improved weighting"""
         try:
-            # Normalize rates to hourly basis
-            hourly_rate = funding_rate / payment_interval
-            hourly_predicted = predicted_rate / payment_interval
+            # Base score from rate difference
+            score = abs(row['rate_diff']) * 100
             
-            # Calculate score components
-            rate_magnitude = abs(hourly_rate)
-            rate_consistency = 1 - (abs(hourly_rate - hourly_predicted) / (rate_magnitude + 1e-10))
-            time_factor = 1 - (time_to_funding / payment_interval)
+            # Adjust based on payment interval
+            interval_factor = 8.0 / row['payment_interval']
+            score *= interval_factor
             
-            # Combine components
-            score = rate_magnitude * rate_consistency * time_factor
-            return round(score, 6)
+            # Adjust based on volume
+            if row['volume_24h'] > 0:
+                volume_factor = min(1.5, math.log10(row['volume_24h']) / 5)
+                score *= volume_factor
+            
+            # Adjust based on mark price
+            if row['mark_price'] > 0:
+                price_factor = min(1.2, math.log10(row['mark_price']) / 4)
+                score *= price_factor
+                
+            return round(score, 2)
             
         except Exception as e:
-            logger.warning(f"Error calculating opportunity score: {e}")
+            logger.error(f"Error calculating opportunity score: {e}")
             return 0.0
 
     def analyze_arbitrage_opportunities(self, comparison_df: pd.DataFrame) -> List[Dict]:
@@ -564,6 +424,7 @@ def main():
             
     except Exception as e:
         console.print(f"[red]Error in main execution: {str(e)}[/red]")
+        logger.error(f"Traceback: {traceback.format_exc()}")
 
 if __name__ == "__main__":
     main() 
