@@ -18,6 +18,7 @@ from rich.table import Table
 import requests
 import traceback
 import math
+from supabase import create_client
 
 # Load environment variables
 load_dotenv()
@@ -38,68 +39,79 @@ class AdvancedFundingAnalyzer:
                 'adjustForTimeDifference': True,
                 'defaultNetwork': 'BSC',
                 'recvWindow': 60000,
-                'fetchFundingRateHistory': {
-                    'limit': 1000,
-                }
             },
             'rateLimit': 100,
-            'timeout': 30000,
-            'headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            }
+            'timeout': 30000
         })
         
         # Initialize Hyperliquid client
-        self.hyperliquid = ccxt.hyperliquid({
-            'enableRateLimit': True,
-            'options': {
-                'defaultType': 'swap',  # for perpetual futures
-                'adjustForTimeDifference': True
-            }
-        })
+        self.hyperliquid = Info(
+            base_url=constants.MAINNET_API_URL,
+            request_timeout=30
+        )
 
-    def get_hyperliquid_all_rates(self) -> List[Dict]:
-        """Fetch funding rates from Hyperliquid using CCXT"""
+        # Initialize Supabase client properly
+        try:
+            self.supabase = create_client(
+                supabase_url=os.getenv('NEXT_PUBLIC_SUPABASE_URL'),
+                supabase_key=os.getenv('NEXT_PUBLIC_SUPABASE_KEY'),
+                options={
+                    'headers': {
+                        'Authorization': f'Bearer {os.getenv("NEXT_PUBLIC_SUPABASE_KEY")}',
+                        'apikey': os.getenv('NEXT_PUBLIC_SUPABASE_KEY')
+                    }
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize Supabase: {e}")
+            self.supabase = None
+
+    async def get_hyperliquid_rates(self) -> List[Dict]:
+        """Fetch funding rates from Hyperliquid"""
         try:
             console.print("[cyan]Loading Hyperliquid markets...[/cyan]")
             
-            # Use CCXT's fetchFundingRates method
-            funding_rates = self.hyperliquid.fetch_funding_rates()
+            # Get all markets info
+            markets = await self.hyperliquid.get_all_mids()
             
+            if not markets or 'allMids' not in markets:
+                logger.error("No Hyperliquid markets data available")
+                return []
+
             formatted_rates = []
-            for symbol, data in funding_rates.items():
+            for market in markets['allMids']:
                 try:
-                    # Extract base symbol (remove USDT)
-                    base = symbol.split('/')[0]
-                    
-                    # Convert rates to percentages
-                    funding_rate = float(data['fundingRate']) * 100
-                    predicted_rate = float(data.get('predictedRate', funding_rate)) * 100
+                    symbol = market['coin']
+                    funding_rate = float(market.get('fundingRate', 0))
+                    mark_price = float(market.get('markPrice', 0))
                     
                     formatted_rates.append({
                         'exchange': 'Hyperliquid',
-                        'symbol': base,
+                        'symbol': symbol,
                         'funding_rate': funding_rate,
-                        'predicted_rate': predicted_rate,
-                        'next_funding_time': datetime.fromtimestamp(data['fundingTimestamp'] / 1000) if data.get('fundingTimestamp') else datetime.now() + timedelta(hours=1),
-                        'mark_price': float(data.get('markPrice', 0)),
+                        'predicted_rate': funding_rate,  # Use current rate as prediction
+                        'next_funding_time': datetime.now() + timedelta(hours=1),
+                        'mark_price': mark_price,
                         'payment_interval': 1,  # Hyperliquid uses 1-hour intervals
-                        'volume_24h': float(data.get('volume24h', 0)),
+                        'volume_24h': float(market.get('volume24h', 0)),
                         'timestamp': datetime.now()
                     })
-                    
                 except Exception as e:
-                    logger.warning(f"Error processing Hyperliquid rate for {symbol}: {e}")
+                    logger.warning(f"Error processing Hyperliquid market {market.get('coin', 'unknown')}: {e}")
                     continue
-            
+
             if formatted_rates:
                 console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Hyperliquid rates[/green]")
+                
+                # Display sample rates
+                console.print("\nSample Hyperliquid rates:")
+                for rate in formatted_rates[:3]:
+                    console.print(f"Symbol: {rate['symbol']}, Rate: {rate['funding_rate']}, Predicted: {rate['predicted_rate']}")
+                
             return formatted_rates
 
         except Exception as e:
-            logger.error(f"Error fetching Hyperliquid rates: {str(e)}")
+            logger.error(f"Error fetching Hyperliquid rates: {e}")
             return []
 
     def get_binance_all_rates(self) -> List[Dict]:
@@ -177,7 +189,7 @@ class AdvancedFundingAnalyzer:
         try:
             # Get Hyperliquid rates first
             console.print("\n[cyan]Fetching Hyperliquid rates first...[/cyan]")
-            hl_rates = asyncio.run(self.get_hyperliquid_all_rates())
+            hl_rates = asyncio.run(self.get_hyperliquid_rates())
             
             if not hl_rates:
                 console.print("[red]❌ No Hyperliquid rates available[/red]")
@@ -417,6 +429,59 @@ class AdvancedFundingAnalyzer:
             return comparison_df
         else:
             return pd.DataFrame()
+
+    def push_to_supabase(self, df: pd.DataFrame) -> bool:
+        """Push analyzed data to Supabase"""
+        try:
+            if not self.supabase:
+                logger.error("Supabase client not initialized")
+                return False
+
+            # Convert DataFrame to records
+            records = df.to_dict('records')
+            
+            # Push market data
+            try:
+                self.supabase.table('funding_rate_snapshots').upsert(
+                    records,
+                    on_conflict='exchange,symbol,timestamp'
+                ).execute()
+                logger.info(f"Pushed {len(records)} market records")
+            except Exception as e:
+                logger.error(f"Error pushing market records: {e}")
+
+            # Push statistics
+            try:
+                stats = {
+                    'timestamp': datetime.now().isoformat(),
+                    'total_markets': len(df),
+                    'positive_funding': len(df[df['funding_rate'] > 0]),
+                    'negative_funding': len(df[df['funding_rate'] < 0]),
+                    'avg_funding_rate': df['funding_rate'].mean(),
+                    'max_funding_rate': df['funding_rate'].max(),
+                    'min_funding_rate': df['funding_rate'].min()
+                }
+                self.supabase.table('market_stats').upsert(
+                    stats,
+                    on_conflict='timestamp'
+                ).execute()
+                logger.info("Pushed statistics")
+            except Exception as e:
+                logger.error(f"Error pushing statistics: {e}")
+
+            # Push top opportunities
+            try:
+                top_opps = df.nlargest(100, 'opportunity_score').to_dict('records')
+                self.supabase.table('funding_top_opportunities').insert(top_opps).execute()
+                logger.info(f"Pushed {len(top_opps)} top opportunities")
+            except Exception as e:
+                logger.error(f"Error pushing top opportunities: {e}")
+
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in push_to_supabase: {e}")
+            return False
 
 def main():
     try:
