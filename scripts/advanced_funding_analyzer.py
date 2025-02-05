@@ -15,7 +15,6 @@ from hyperliquid.utils import constants
 import aiohttp
 import asyncio
 from rich.table import Table
-import requests
 
 # Load environment variables
 load_dotenv()
@@ -27,28 +26,13 @@ console = Console()
 
 class AdvancedFundingAnalyzer:
     def __init__(self):
-        """Initialize exchange connections with proper configuration"""
-        # Initialize Binance with CCXT
         self.binance = ccxt.binance({
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'future',
-                'adjustForTimeDifference': True,
-                'defaultNetwork': 'BSC',
-                'recvWindow': 60000,
-                'fetchFundingRateHistory': {
-                    'limit': 1000,
-                }
-            },
-            'rateLimit': 100,
-            'timeout': 30000,
-            'headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
+                'adjustForTimeDifference': True
             }
         })
-        
         # Use CCXT for Hyperliquid
         self.hyperliquid = ccxt.hyperliquid({
             'enableRateLimit': True,
@@ -62,165 +46,71 @@ class AdvancedFundingAnalyzer:
         """Fetch both current and predicted funding rates from Binance"""
         try:
             console.print("[cyan]Loading Binance markets...[/cyan]")
+            self.binance.load_markets()
             
-            # Try using public API endpoints
-            endpoints = [
-                "https://api.allorigins.win/raw?url=https://fapi.binance.com/fapi/v1/premiumIndex",
-                "https://api.codetabs.com/v1/proxy?quest=https://fapi.binance.com/fapi/v1/premiumIndex",
-                "https://cors-anywhere.herokuapp.com/https://fapi.binance.com/fapi/v1/premiumIndex"
-            ]
+            formatted_rates = []
+            markets = [s for s in self.binance.symbols if s.endswith(':USDT')]
             
-            for proxy_url in endpoints:
-                try:
-                    response = requests.get(
-                        proxy_url,
-                        timeout=15,
-                        headers={
-                            'User-Agent': 'Mozilla/5.0',
-                            'Accept': 'application/json'
-                        }
-                    )
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        formatted_rates = []
-                        
-                        for item in data:
-                            try:
-                                if not isinstance(item, dict) or 'symbol' not in item:
-                                    continue
-                                    
-                                if not item['symbol'].endswith('USDT'):
-                                    continue
-                                    
-                                symbol = item['symbol'].replace('USDT', '')
-                                funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
-                                predicted_rate = float(item.get('predictedFundingRate', 0)) * 100  # Convert to percentage
-                                
-                                # Calculate annualized rates (8-hour intervals)
-                                annualized_rate = funding_rate * (365 * 3)  # 3 funding periods per day
-                                
-                                formatted_rates.append({
-                                    'exchange': 'Binance',
-                                    'symbol': symbol,
-                                    'funding_rate': funding_rate,
-                                    'predicted_rate': predicted_rate,
-                                    'next_funding_time': datetime.fromtimestamp(
-                                        int(item.get('nextFundingTime', time.time() * 1000)) / 1000
-                                    ),
-                                    'mark_price': float(item.get('markPrice', 0)),
-                                    'payment_interval': 8,
-                                    'volume_24h': 0,
-                                    'timestamp': datetime.now(),
-                                    'annualized_rate': annualized_rate,
-                                    'rate_diff': abs(predicted_rate - funding_rate)
-                                })
-                            except Exception as e:
-                                logger.warning(f"Error processing item {item}: {e}")
-                                continue
-                        
-                        if formatted_rates:
-                            console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates[/green]")
-                            return formatted_rates
-                            
-                except Exception as e:
-                    logger.warning(f"Proxy endpoint {proxy_url} failed: {e}")
-                    continue
-            
-            # If all proxies fail, try direct API call with VPN headers
-            try:
-                response = requests.get(
-                    "https://fapi.binance.com/fapi/v1/premiumIndex",
-                    timeout=15,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept': 'application/json',
-                        'X-Forwarded-For': '8.8.8.8',  # Google DNS IP
-                        'Origin': 'https://www.binance.com'
-                    }
-                )
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            ) as progress:
+                task = progress.add_task("[cyan]Fetching Binance rates...", total=len(markets))
                 
-                if response.status_code == 200:
-                    # Process response same as above...
-                    data = response.json()
-                    formatted_rates = []
-                    
-                    for item in data:
-                        try:
-                            if not isinstance(item, dict) or 'symbol' not in item:
-                                continue
-                                
-                            if not item['symbol'].endswith('USDT'):
-                                continue
-                                
-                            symbol = item['symbol'].replace('USDT', '')
-                            funding_rate = float(item.get('lastFundingRate', 0)) * 100  # Convert to percentage
-                            predicted_rate = float(item.get('predictedFundingRate', 0)) * 100  # Convert to percentage
-                            
-                            # Calculate annualized rates (8-hour intervals)
-                            annualized_rate = funding_rate * (365 * 3)  # 3 funding periods per day
-                            
-                            formatted_rates.append({
-                                'exchange': 'Binance',
-                                'symbol': symbol,
-                                'funding_rate': funding_rate,
-                                'predicted_rate': predicted_rate,
-                                'next_funding_time': datetime.fromtimestamp(
-                                    int(item.get('nextFundingTime', time.time() * 1000)) / 1000
-                                ),
-                                'mark_price': float(item.get('markPrice', 0)),
-                                'payment_interval': 8,
-                                'volume_24h': 0,
-                                'timestamp': datetime.now(),
-                                'annualized_rate': annualized_rate,
-                                'rate_diff': abs(predicted_rate - funding_rate)
-                            })
-                        except Exception as e:
-                            logger.warning(f"Error processing item {item}: {e}")
-                            continue
-                    
-                    if formatted_rates:
-                        console.print(f"[green]✓ Successfully fetched {len(formatted_rates)} Binance rates directly[/green]")
-                        return formatted_rates
+                for symbol in markets:
+                    try:
+                        funding_rate = self.binance.fetch_funding_rate(symbol)
                         
-            except Exception as e:
-                logger.error(f"Direct API call failed: {e}")
+                        base = symbol.split('/')[0].replace(':USDT', '')
+                        formatted_rates.append({
+                            'exchange': 'Binance',
+                            'symbol': base,
+                            'funding_rate': float(funding_rate['fundingRate']),
+                            'predicted_rate': float(funding_rate.get('predictedFundingRate', 0)),
+                            'next_funding_time': datetime.fromtimestamp(funding_rate['fundingTimestamp'] / 1000),
+                            'mark_price': float(funding_rate.get('markPrice', 0)),
+                            'payment_interval': 8
+                        })
+                        progress.update(task, advance=1)
+                        time.sleep(self.binance.rateLimit / 1000)  # Respect rate limits
+                        
+                    except Exception as e:
+                        logger.warning(f"Error processing Binance rate for {symbol}: {e}")
+                        progress.update(task, advance=1)
+                        continue
             
-            logger.error("All attempts to fetch Binance rates failed")
-            return []
+            return formatted_rates
             
         except Exception as e:
-            logger.error(f"Error in get_binance_all_rates: {e}")
+            logger.error(f"Error fetching Binance rates: {e}")
             return []
 
     def get_hyperliquid_all_rates(self) -> List[Dict]:
         """Fetch funding rates from Hyperliquid using CCXT"""
         try:
+            # Disable progress display for integration
             formatted_rates = []
             
             try:
+                # Load markets without progress display
                 markets = self.hyperliquid.load_markets()
+                
+                # Fetch funding rates directly
                 funding_rates = self.hyperliquid.fetch_funding_rates()
                 
                 for symbol, data in funding_rates.items():
                     try:
                         base = symbol.split('/')[0]
-                        funding_rate = float(data['fundingRate']) * 100  # Convert to percentage
-                        predicted_rate = float(data.get('predictedRate', 0)) * 100  # Convert to percentage
-                        
-                        # Calculate annualized rates (1-hour intervals)
-                        annualized_rate = funding_rate * (365 * 24)  # 24 funding periods per day
-                        
                         formatted_rates.append({
                             'exchange': 'Hyperliquid',
                             'symbol': base,
-                            'funding_rate': funding_rate,
-                            'predicted_rate': predicted_rate,
+                            'funding_rate': float(data['fundingRate']),
+                            'predicted_rate': float(data.get('predictedRate', 0)),
                             'next_funding_time': datetime.fromtimestamp(data.get('fundingTimestamp', time.time()) / 1000),
                             'mark_price': float(data.get('markPrice', 0)),
-                            'payment_interval': 1,
-                            'annualized_rate': annualized_rate,
-                            'rate_diff': abs(predicted_rate - funding_rate)
+                            'payment_interval': 1
                         })
                     except Exception as e:
                         logger.warning(f"Error processing Hyperliquid rate for {symbol}: {e}")
@@ -305,61 +195,43 @@ class AdvancedFundingAnalyzer:
             return {}
 
     def analyze_funding_opportunities(self) -> pd.DataFrame:
-        """Analyze funding rates and calculate opportunities"""
+        """Analyze funding opportunities across exchanges"""
         try:
-            # Fetch rates from both exchanges
-            binance_rates = self.get_binance_all_rates()
-            hyperliquid_rates = self.get_hyperliquid_all_rates()
+            # Get Hyperliquid rates first with debugging
+            console.print("\n[cyan]Fetching Hyperliquid rates first...[/cyan]")
+            hl_rates = self.get_hyperliquid_all_rates()
             
-            # Combine rates
-            all_rates = binance_rates + hyperliquid_rates
-            
-            if not all_rates:
+            if not hl_rates:
+                console.print("[red]❌ No Hyperliquid rates available[/red]")
                 return pd.DataFrame()
             
-            # Create DataFrame
-            df = pd.DataFrame(all_rates)
+            # Debug output for Hyperliquid rates
+            console.print(f"\n[green]✓ Successfully fetched {len(hl_rates)} Hyperliquid rates[/green]")
+            console.print("\nSample Hyperliquid rates:")
+            for rate in hl_rates[:3]:
+                console.print(f"Symbol: {rate['symbol']}, Rate: {rate['funding_rate']}, Predicted: {rate['predicted_rate']}")
             
-            # Calculate time to funding
-            df['time_to_funding'] = (df['next_funding_time'] - datetime.now()).dt.total_seconds() / 3600
-            
-            # Calculate opportunity score
-            df['opportunity_score'] = df.apply(lambda x: self._calculate_opportunity_score(
-                funding_rate=x['funding_rate'],
-                predicted_rate=x['predicted_rate'],
-                time_to_funding=x['time_to_funding'],
-                payment_interval=x['payment_interval']
-            ), axis=1)
-            
-            # Add trading direction
-            df['direction'] = df['funding_rate'].apply(lambda x: 'Long' if x < 0 else 'Short')
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error in analyze_funding_opportunities: {e}")
-            return pd.DataFrame()
+            # Get Binance rates
+            console.print("\n[cyan]Fetching Binance rates...[/cyan]")
+            binance_rates = self.get_binance_all_rates()
 
-    def _calculate_opportunity_score(self, funding_rate: float, predicted_rate: float, 
-                                   time_to_funding: float, payment_interval: int) -> float:
-        """Calculate opportunity score with proper rate handling"""
-        try:
-            # Normalize rates to hourly basis
-            hourly_rate = funding_rate / payment_interval
-            hourly_predicted = predicted_rate / payment_interval
-            
-            # Calculate score components
-            rate_magnitude = abs(hourly_rate)
-            rate_consistency = 1 - (abs(hourly_rate - hourly_predicted) / (rate_magnitude + 1e-10))
-            time_factor = 1 - (time_to_funding / payment_interval)
-            
-            # Combine components
-            score = rate_magnitude * rate_consistency * time_factor
-            return round(score, 6)
-            
+            # Combine and process rates
+            all_rates = hl_rates + binance_rates
+            if not all_rates:
+                console.print("[red]❌ No funding rates data available[/red]")
+                return pd.DataFrame()
+
+            df = pd.DataFrame(all_rates)
+            df['annualized_rate'] = df.apply(
+                lambda x: float(x['funding_rate']) * (365 * 24 / x['payment_interval']) * 100,
+                axis=1
+            )
+
+            return df
+
         except Exception as e:
-            logger.warning(f"Error calculating opportunity score: {e}")
-            return 0.0
+            logger.error(f"Error analyzing funding opportunities: {e}")
+            return pd.DataFrame()
 
     def analyze_arbitrage_opportunities(self, comparison_df: pd.DataFrame) -> List[Dict]:
         """Analyze and recommend arbitrage opportunities"""
